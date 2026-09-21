@@ -16,7 +16,7 @@ The point of doing all this work in public is to ensure that we are holding ours
 
 The team triages new issues several times a week. During triage, the team uses labels to categorize, manage, and drive the project workflow.
 
-We employ [a bot engine](./doc/bot.md) to help us automate common processes within our workflow.
+We employ a bot engine to help us automate common processes within our workflow.
 
 We drive the bot by tagging issues with specific labels which cause the bot engine to close issues, merge branches, etc. This bot engine helps us keep the repo clean by automating the process of notifying appropriate parties if/when information/follow-up is needed, and closing stale issues/PRs after reminders have remained unanswered for several days.
 
@@ -133,7 +133,7 @@ Specs will be managed in a very similar manner as code contributions so please f
 
 To write/contribute to a spec: fork, branch and commit via PRs, as you would with any code changes.
 
-Specs are written in markdown, stored under the [`\doc\specs`](./doc/specs) folder and named `[issue id] - [spec description].md`.
+Specs are written in markdown and named `[issue id] - [spec description].md`.
 
 👉 **It is important to follow the spec templates and complete the requested information**. The available spec templates will help ensure that specs contain the minimum information & decisions necessary to permit development to begin. In particular, specs require you to confirm that you've already discussed the issue/idea with the team in an issue and that you provide the issue ID for reference.
 
