@@ -155,6 +155,19 @@
                       Style="{StaticResource ComboBoxSettingStyle}" />
         </local:SettingsCard>
 
+        <!--  Tab Position  -->
+        <local:SettingsCard x:Name="TabPosition"
+                            x:Uid="Globals_TabPosition">
+            <local:SettingsCard.HeaderIcon>
+                <FontIcon Glyph="&#xE76E;" />
+            </local:SettingsCard.HeaderIcon>
+            <ComboBox AutomationProperties.AccessibilityView="Content"
+                      ItemTemplate="{StaticResource EnumComboBoxTemplate}"
+                      ItemsSource="{x:Bind ViewModel.TabPositionList, Mode=OneWay}"
+                      SelectedItem="{x:Bind ViewModel.CurrentTabPosition, Mode=TwoWay}"
+                      Style="{StaticResource ComboBoxSettingStyle}" />
+        </local:SettingsCard>
+
         <!--  Section: Window behavior  -->
         <TextBlock x:Uid="Globals_Section_WindowBehavior"
                    Style="{StaticResource TextBlockSubHeaderStyle}" />

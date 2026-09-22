@@ -73,6 +73,8 @@ namespace TerminalAppLocalTests
 
         TEST_METHOD(CreateSimpleTerminalXamlType);
         TEST_METHOD(CreateTerminalMuxXamlType);
+        TEST_METHOD(VerticalTabViewLayout);
+        TEST_METHOD(SideTabsPageLayout);
 
         TEST_METHOD(CreateTerminalPage);
 
@@ -118,7 +120,17 @@ namespace TerminalAppLocalTests
     template<typename TFunction>
     void TestOnUIThread(const TFunction& function)
     {
-        const auto result = RunOnUIThread(function);
+        const auto result = RunOnUIThread([&]() {
+            try
+            {
+                function();
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                Log::Comment(NoThrowString().Format(L"WinRT error 0x%08X: %s", static_cast<HRESULT>(error.code()), error.message().c_str()));
+                throw;
+            }
+        });
         VERIFY_SUCCEEDED(result);
     }
 
@@ -180,6 +192,84 @@ namespace TerminalAppLocalTests
             VERIFY_IS_NOT_NULL(tabRowControl);
         });
         VERIFY_SUCCEEDED(result);
+    }
+
+    void TabTests::VerticalTabViewLayout()
+    {
+        winrt::TerminalApp::TabRowControl row{ nullptr };
+        ::details::Event loaded;
+        VERIFY_IS_TRUE(loaded.IsValid());
+
+        TestOnUIThread([&]() {
+            // Match the application's WinUI resources, including DefaultTabViewStyle.
+            Application::Current().Resources().MergedDictionaries().Append(winrt::MUX::Controls::XamlControlsResources{});
+            row = winrt::TerminalApp::TabRowControl{};
+            Log::Comment(L"Load the vertical tab resources");
+            row.SetVertical(true);
+            row.Width(200);
+            row.Height(320);
+            const auto tabView = row.TabView();
+            tabView.TabWidthMode(winrt::MUX::Controls::TabViewWidthMode::SizeToContent);
+            for (auto i = 0; i < 20; ++i)
+            {
+                winrt::MUX::Controls::TabViewItem tab;
+                tab.Header(winrt::box_value(L"A long terminal tab title that must fit in the sidebar"));
+                tabView.TabItems().Append(tab);
+            }
+            tabView.SelectedIndex(0);
+
+            // Creating a control alone does not exercise its template contract.
+            // The old vertical template fails when WinUI applies/measures it.
+            Log::Comment(L"Apply the vertical tab template");
+            tabView.ApplyTemplate();
+            row.Loaded([&](auto&&, auto&&) { loaded.Set(); });
+            Window::Current().Content(row);
+            Window::Current().Activate();
+            row.UpdateLayout();
+        });
+        VERIFY_SUCCEEDED(Thread_Wait_For(loaded.m_handle, 10000));
+
+        TestOnUIThread([&]() {
+            row.UpdateLayout();
+            const auto tabView = row.TabView();
+            const auto first = tabView.ContainerFromIndex(0).as<winrt::MUX::Controls::TabViewItem>();
+            const auto second = tabView.ContainerFromIndex(1).as<winrt::MUX::Controls::TabViewItem>();
+            const auto firstPosition = first.TransformToVisual(row).TransformPoint({});
+            const auto secondPosition = second.TransformToVisual(row).TransformPoint({});
+            VERIFY_ARE_EQUAL(firstPosition.X, secondPosition.X);
+            VERIFY_IS_TRUE(secondPosition.Y > firstPosition.Y);
+            VERIFY_IS_TRUE(first.ActualWidth() > 100.0);
+            VERIFY_IS_TRUE(first.ActualWidth() <= row.ActualWidth());
+
+            // Inspect the actual scroll viewport, not just the declared style.
+            ScrollViewer scroller{ nullptr };
+            std::vector<DependencyObject> pending{ row };
+            while (!pending.empty() && !scroller)
+            {
+                const auto current = pending.back();
+                pending.pop_back();
+                scroller = current.try_as<ScrollViewer>();
+                for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(current); ++i)
+                {
+                    pending.push_back(Media::VisualTreeHelper::GetChild(current, i));
+                }
+            }
+            VERIFY_IS_NOT_NULL(scroller);
+            VERIFY_IS_TRUE(scroller.ScrollableHeight() > 0.0);
+            VERIFY_ARE_EQUAL(0.0, scroller.ScrollableWidth());
+            VERIFY_ARE_EQUAL(ScrollMode::Enabled, scroller.VerticalScrollMode());
+
+            tabView.SelectedIndex(1);
+            VERIFY_ARE_EQUAL(second, tabView.SelectedItem().as<winrt::MUX::Controls::TabViewItem>());
+            tabView.TabItems().RemoveAt(1);
+            row.UpdateLayout();
+            VERIFY_ARE_EQUAL(19u, tabView.TabItems().Size());
+            VERIFY_IS_NOT_NULL(tabView.SelectedItem());
+
+            Window::Current().Content(nullptr);
+            row = nullptr;
+            Application::Current().Resources().MergedDictionaries().RemoveAtEnd();
+        });
     }
 
     void TabTests::CreateTerminalPage()
@@ -350,6 +440,70 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(1u, page->_tabs.Size());
         });
         VERIFY_SUCCEEDED(result);
+    }
+
+    void TabTests::SideTabsPageLayout()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:showTabsInTitlebar", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+
+        bool showTabsInTitlebar;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"showTabsInTitlebar", showTabsInTitlebar));
+        CascadiaSettings settings{ LR"({
+            "tabPosition": "left",
+            "alwaysShowTabs": true,
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{
+                "name": "Side tabs test",
+                "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+                "closeOnExit": "never"
+            }]
+        })",
+                                   {} };
+        settings.WindowSettings(L"").ShowTabsInTitlebar(showTabsInTitlebar);
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+
+        TestOnUIThread([&]() {
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
+            VERIFY_ARE_EQUAL(200.0, page->_tabRow.ActualWidth());
+            VERIFY_ARE_EQUAL(winrt::MUX::Controls::TabViewWidthMode::SizeToContent, page->_tabView.TabWidthMode());
+            VERIFY_ARE_EQUAL(1, Grid::GetColumn(page->_tabContent));
+            VERIFY_IS_TRUE(page->_tabContent.ActualHeight() > 0.0);
+
+            page->SetFocusMode(true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(0.0, page->_tabRow.ActualWidth());
+            page->SetFocusMode(false);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(200.0, page->_tabRow.ActualWidth());
+
+            page->SetFullscreen(true);
+            page->SetShowTabsFullscreen(false);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(0.0, page->_tabRow.ActualWidth());
+            page->SetShowTabsFullscreen(true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(200.0, page->_tabRow.ActualWidth());
+            page->SetFullscreen(false);
+
+            // A titlebar preference must not force a single side tab to stay visible.
+            settings.WindowSettings(L"").AlwaysShowTabs(false);
+            page->_UpdateTabView();
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(0.0, page->_tabRow.ActualWidth());
+            settings.WindowSettings(L"").AlwaysShowTabs(true);
+
+            // Changing the preference affects future windows, not this page's layout.
+            settings.WindowSettings(L"").TabPosition(TabPosition::Top);
+            page->SetSettings(settings, true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
+            VERIFY_ARE_EQUAL(200.0, page->_tabRow.ActualWidth());
+            VERIFY_ARE_EQUAL(winrt::MUX::Controls::TabViewWidthMode::SizeToContent, page->_tabView.TabWidthMode());
+        });
     }
 
     void TabTests::TryDuplicateBadTab()

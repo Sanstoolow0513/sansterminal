@@ -246,24 +246,35 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    // Width of the vertical tab strip ("tabPosition": "left").
+    // Keep in sync with sideTabRowWidth in TerminalWindow.cpp.
+    static constexpr auto s_sideTabRowWidth{ 200.0 };
+
     // Method Description:
     // - Handle changes to the tab width set by the user
     void TerminalPage::_UpdateTabWidthMode()
     {
-        _tabView.TabWidthMode(_currentWindowSettings().TabWidthMode());
+        // "equal" sizing is a horizontal-strip algorithm; with side tabs
+        // every row simply sizes to its content.
+        _tabView.TabWidthMode(_tabPosition == TabPosition::Left ? MUX::Controls::TabViewWidthMode::SizeToContent :
+                                                                  _currentWindowSettings().TabWidthMode());
     }
 
     // Method Description:
     // - Handle changes in tab layout.
     void TerminalPage::_UpdateTabView()
     {
+        const auto sideTabs{ _tabPosition == TabPosition::Left };
+
         // The tab row should only be visible if:
         // - we're not in focus mode
         // - we're not in full screen, or the user has enabled fullscreen tabs
         // - there is more than one tab, or the user has chosen to always show tabs
+        // Side tabs never live in the titlebar, so ShowTabsInTitlebar doesn't
+        // keep them visible on its own.
         const auto isVisible = !_isInFocusMode &&
                                (!_isFullscreen || _showTabsFullscreen) &&
-                               (_currentWindowSettings().ShowTabsInTitlebar() ||
+                               ((!sideTabs && _currentWindowSettings().ShowTabsInTitlebar()) ||
                                 (_tabs.Size() > 1) ||
                                 _currentWindowSettings().AlwaysShowTabs());
 
@@ -276,7 +287,14 @@ namespace winrt::TerminalApp::implementation
         {
             // collapse/show the row that the tabs are in.
             // NaN is the special value XAML uses for "Auto" sizing.
-            _tabRow.Height(isVisible ? NAN : 0);
+            if (sideTabs)
+            {
+                _tabRow.Width(isVisible ? s_sideTabRowWidth : 0);
+            }
+            else
+            {
+                _tabRow.Height(isVisible ? NAN : 0);
+            }
         }
     }
 

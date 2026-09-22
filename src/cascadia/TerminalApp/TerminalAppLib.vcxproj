@@ -61,6 +61,10 @@
     <Page Include="TabHeaderControl.xaml">
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="VerticalTabViewResources.xaml">
+      <Type>DefaultStyle</Type>
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="HighlightedTextControlStyle.xaml">
       <Type>DefaultStyle</Type>
       <SubType>Designer</SubType>

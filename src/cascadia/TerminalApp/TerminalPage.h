@@ -299,6 +299,9 @@ namespace winrt::TerminalApp::implementation
         bool _isAlwaysOnTop{ false };
         bool _showTabsFullscreen{ false };
 
+        // Read once when the page is created; changing "tabPosition" requires an app restart.
+        Microsoft::Terminal::Settings::Model::TabPosition _tabPosition{ Microsoft::Terminal::Settings::Model::TabPosition::Top };
+
         std::optional<uint32_t> _loadFromPersistedLayoutIdx{};
 
         bool _rearranging{ false };

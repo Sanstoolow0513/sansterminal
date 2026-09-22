@@ -8,6 +8,7 @@ namespace TerminalApp
     {
         TabRowControl();
         Microsoft.UI.Xaml.Controls.TabView TabView { get; };
+        void SetVertical(Boolean vertical);
         Boolean ShowElevationShield;
         Boolean ShowWorkspacesButton;
         String WorkspaceName;

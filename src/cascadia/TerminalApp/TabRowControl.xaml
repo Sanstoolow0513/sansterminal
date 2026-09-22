@@ -18,6 +18,10 @@
         here, not Transparent. This is load bearing, for showTabsInTitlebar=false.
     -->
 
+    <ContentPresenter.Resources>
+        <ResourceDictionary />
+    </ContentPresenter.Resources>
+
     <!--
         Set the padding to -1 on the bottom. This prevents a small 1px gap that
         can appear on 150% scale displays between the tab item and the content.

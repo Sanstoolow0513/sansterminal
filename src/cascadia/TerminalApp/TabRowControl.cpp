@@ -26,6 +26,27 @@ namespace winrt::TerminalApp::implementation
     }
 
     // Method Description:
+    // - Switches the tab strip into vertical ("side tabs") mode, used when
+    //   "tabPosition": "left" is active. Merges the vertical style resources
+    //   and applies the vertical TabView template before layout.
+    void TabRowControl::SetVertical(bool vertical)
+    {
+        if (!vertical)
+        {
+            return;
+        }
+
+        WUX::ResourceDictionary verticalResources{};
+        verticalResources.Source(winrt::Windows::Foundation::Uri{ L"ms-appx:///TerminalApp/VerticalTabViewResources.xaml" });
+        Resources().MergedDictionaries().Append(verticalResources);
+
+        // Keep the lookup scoped to the dictionary that defines the style.
+        TabView().Style(verticalResources.Lookup(winrt::box_value(L"VerticalTabViewStyle")).as<WUX::Style>());
+        TabView().VerticalAlignment(WUX::VerticalAlignment::Stretch);
+        VerticalContentAlignment(WUX::VerticalAlignment::Stretch);
+    }
+
+    // Method Description:
     // - Bound in the Xaml editor to the [+] button.
     // Arguments:
     // <unused>

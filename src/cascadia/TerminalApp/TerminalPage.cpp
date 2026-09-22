@@ -325,6 +325,20 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::Create()
     {
+        // Window activation can be delivered reentrantly while the XAML tree is
+        // being initialized (notably while loading the side-tab resources).
+        // Initialize this first so every activation callback can use it safely.
+        _adjustProcessPriorityThrottled = std::make_shared<ThrottledFunc<>>(
+            DispatcherQueue::GetForCurrentThread(),
+            til::throttled_func_options{
+                .delay = std::chrono::milliseconds{ 100 },
+                .debounce = true,
+                .trailing = true,
+            },
+            [=]() {
+                _adjustProcessPriority();
+            });
+
         // Hookup the key bindings
         _HookupKeyBindings(_settings.ActionMap());
 
@@ -358,7 +372,37 @@ namespace winrt::TerminalApp::implementation
             }
         });
 
-        if (_currentWindowSettings().ShowTabsInTitlebar())
+        _tabPosition = _currentWindowSettings().TabPosition();
+
+        if (_tabPosition == Settings::Model::TabPosition::Left)
+        {
+            // Side tabs: the tab row stays in the page, in a new left-hand
+            // column, with a vertical tab strip. The titlebar then only
+            // hosts the drag bar and the caption buttons.
+            auto root = this->Root();
+
+            WUX::Controls::ColumnDefinition tabsColumn{};
+            tabsColumn.Width(WUX::GridLengthHelper::FromValueAndType(1, WUX::GridUnitType::Auto));
+            WUX::Controls::ColumnDefinition contentColumn{};
+            contentColumn.Width(WUX::GridLengthHelper::FromValueAndType(1, WUX::GridUnitType::Star));
+            root.ColumnDefinitions().Append(tabsColumn);
+            root.ColumnDefinitions().Append(contentColumn);
+
+            WUX::Controls::Grid::SetRowSpan(_tabRow, static_cast<int32_t>(root.RowDefinitions().Size()));
+            for (const auto& child : root.Children())
+            {
+                if (child != _tabRow)
+                {
+                    if (const auto& frameworkElement{ child.try_as<WUX::FrameworkElement>() })
+                    {
+                        WUX::Controls::Grid::SetColumn(frameworkElement, 1);
+                    }
+                }
+            }
+
+            tabRowImpl->SetVertical(true);
+        }
+        else if (_currentWindowSettings().ShowTabsInTitlebar())
         {
             // Remove the TabView from the page. We'll hang on to it, we need to
             // put it in the titlebar.
@@ -472,16 +516,6 @@ namespace winrt::TerminalApp::implementation
             _tabRow.ShowWorkspacesButton(theme.Window() ? theme.Window().ShowWorkspacesButton() : true);
         }
 
-        _adjustProcessPriorityThrottled = std::make_shared<ThrottledFunc<>>(
-            DispatcherQueue::GetForCurrentThread(),
-            til::throttled_func_options{
-                .delay = std::chrono::milliseconds{ 100 },
-                .debounce = true,
-                .trailing = true,
-            },
-            [=]() {
-                _adjustProcessPriority();
-            });
     }
 
     Windows::UI::Xaml::Automation::Peers::AutomationPeer TerminalPage::OnCreateAutomationPeer()
@@ -4130,6 +4164,7 @@ namespace winrt::TerminalApp::implementation
         AlwaysOnTopChanged.raise(*this, nullptr);
 
         _showTabsFullscreen = _currentWindowSettings().ShowTabsFullscreen();
+        _UpdateTabView();
 
         // Settings AllowDependentAnimations will affect whether animations are
         // enabled application-wide, so we don't need to check it each time we
@@ -5141,7 +5176,7 @@ namespace winrt::TerminalApp::implementation
             TitlebarBrush(backgroundSolidBrush);
         }
 
-        if (!_currentWindowSettings().ShowTabsInTitlebar())
+        if (!_currentWindowSettings().ShowTabsInTitlebar() || _tabPosition == Settings::Model::TabPosition::Left)
         {
             _tabRow.Background(TitlebarBrush());
         }
@@ -5351,7 +5386,10 @@ namespace winrt::TerminalApp::implementation
         _activated = activated;
         _updateThemeColors();
 
-        _adjustProcessPriorityThrottled->Run();
+        if (_adjustProcessPriorityThrottled)
+        {
+            _adjustProcessPriorityThrottled->Run();
+        }
 
         if (const auto& tab{ _GetFocusedTabImpl() })
         {
@@ -6032,14 +6070,17 @@ namespace winrt::TerminalApp::implementation
         auto index = -1;
 
         // Determine which items in the list our pointer is between.
+        // With side tabs the strip is vertical, so compare along Y.
+        const auto sideTabs{ _tabPosition == Settings::Model::TabPosition::Left };
         for (auto i = 0u; i < _tabView.TabItems().Size(); i++)
         {
             if (const auto& item{ _tabView.ContainerFromIndex(i).try_as<winrt::MUX::Controls::TabViewItem>() })
             {
-                const auto posX{ e.GetPosition(item).X }; // The point of the drop, relative to the tab
-                const auto itemWidth{ item.ActualWidth() }; // The right of the tab
-                // If the drag point is on the left half of the tab, then insert here.
-                if (posX < itemWidth / 2)
+                const auto pos{ e.GetPosition(item) }; // The point of the drop, relative to the tab
+                const auto posInItem{ sideTabs ? pos.Y : pos.X };
+                const auto itemExtent{ sideTabs ? item.ActualHeight() : item.ActualWidth() }; // The far edge of the tab
+                // If the drag point is on the first half of the tab, then insert here.
+                if (posInItem < itemExtent / 2)
                 {
                     index = i;
                     break;

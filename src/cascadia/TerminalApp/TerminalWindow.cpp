@@ -637,6 +637,15 @@ namespace winrt::TerminalApp::implementation
             proposedSize.Height += (tabRowHeight + 10) * scale;
         }
 
+        // With side tabs, the tab strip sits in a vertical column on the
+        // left side of the window, so reserve width for it. Keep in sync
+        // with s_sideTabRowWidth in TabManagement.cpp.
+        if (_currentWindowSettings().TabPosition() == TabPosition::Left && !focusMode)
+        {
+            static constexpr auto sideTabRowWidth = 200;
+            proposedSize.Width += (sideTabRowWidth)*scale;
+        }
+
         return proposedSize;
     }
 
