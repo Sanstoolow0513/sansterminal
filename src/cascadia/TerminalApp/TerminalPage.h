@@ -260,6 +260,7 @@ namespace winrt::TerminalApp::implementation
 
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, TitlebarBrush, PropertyChanged.raise, nullptr);
         WINRT_OBSERVABLE_PROPERTY(bool, TitlebarOverlayMode, PropertyChanged.raise, false);
+        WINRT_OBSERVABLE_PROPERTY(double, TitlebarOverlayLeftInset, PropertyChanged.raise, 0.0);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, FrameBrush, PropertyChanged.raise, nullptr);
 
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, SavedActionName, PropertyChanged.raise, L"");
@@ -541,6 +542,11 @@ namespace winrt::TerminalApp::implementation
         void _SideTabDockPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _SideTabDividerDragStarted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragStartedEventArgs& args);
         void _SideTabDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
+        void _SideTabDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
+        void _SideTabDividerPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _SideTabDividerPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _SetSideTabDividerCursor(const bool resize);
+        bool _sideTabDividerHovered{ false };
 
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);

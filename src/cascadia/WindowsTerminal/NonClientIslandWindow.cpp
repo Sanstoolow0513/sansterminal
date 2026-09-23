@@ -1259,6 +1259,22 @@ void NonClientIslandWindow::SetTitlebarOverlayMode(const bool overlay)
     _ResizeDragBarWindow();
 }
 
+// Method Description:
+// - Sets how much of the overlay titlebar's left side (in DIPs) is left to the
+//   page instead of the drag region, so the page's chrome stays clickable.
+// Arguments:
+// - inset: the width to leave free, in DIPs.
+// Return Value:
+// - <none>
+void NonClientIslandWindow::SetTitlebarOverlayLeftInset(const double inset)
+{
+    if (_titlebar)
+    {
+        _titlebar.SetOverlayLeftInset(inset);
+    }
+    _ResizeDragBarWindow();
+}
+
 void NonClientIslandWindow::UseMica(const bool newValue, const double titlebarOpacity)
 {
     // Stash internally if we're using Mica. If we aren't, we don't want to

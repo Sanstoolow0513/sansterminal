@@ -106,7 +106,7 @@ namespace winrt::TerminalApp::implementation
         CaptionButtonsBackdrop().Opacity(overlay ? 1.0 : 0.0);
         CaptionButtonsBackdrop().Margin(overlay ? ThicknessHelper::FromLengths(6, 4, 8, 4) : ThicknessHelper::FromLengths(0, 0, 0, 0));
         TitlebarSeparator().Visibility(overlay ? Visibility::Collapsed : Visibility::Visible);
-        DragBar().Margin(overlay ? ThicknessHelper::FromLengths(148, 0, 0, 0) : ThicknessHelper::FromLengths(0, 0, 0, 0));
+        DragBar().Margin(overlay ? ThicknessHelper::FromLengths(_overlayLeftInset, 0, 0, 0) : ThicknessHelper::FromLengths(0, 0, 0, 0));
 
         // The titlebar background is transparent in overlay mode, so it can no
         // longer drive the light/dark decision for the button glyphs. Let the
@@ -118,6 +118,18 @@ namespace winrt::TerminalApp::implementation
         else if (const auto background = Background())
         {
             _backgroundChanged(background);
+        }
+    }
+
+    // Method Description:
+    // - Sets how much room (in DIPs) the overlay drag region leaves on the
+    //   left for the page's own chrome, e.g. the open sidebar's toolbar.
+    void TitlebarControl::SetOverlayLeftInset(const double inset)
+    {
+        _overlayLeftInset = inset;
+        if (_overlayMode)
+        {
+            DragBar().Margin(ThicknessHelper::FromLengths(inset, 0, 0, 0));
         }
     }
 

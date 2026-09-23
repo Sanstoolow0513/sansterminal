@@ -100,6 +100,7 @@ namespace TerminalApp
 
         Windows.UI.Xaml.Media.Brush TitlebarBrush { get; };
         Boolean TitlebarOverlayMode { get; };
+        Double TitlebarOverlayLeftInset { get; };
         void WindowActivated(Boolean activated);
         void SendContentToOther(RequestReceiveContentArgs args);
 

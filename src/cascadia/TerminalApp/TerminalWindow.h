@@ -127,6 +127,7 @@ namespace winrt::TerminalApp::implementation
         winrt::TerminalApp::TaskbarState TaskbarState();
         winrt::Windows::UI::Xaml::Media::Brush TitlebarBrush();
         bool TitlebarOverlayMode();
+        double TitlebarOverlayLeftInset();
         winrt::Windows::UI::Xaml::Media::Brush FrameBrush();
         void WindowActivated(const bool activated);
 

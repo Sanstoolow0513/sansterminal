@@ -954,6 +954,11 @@ namespace winrt::TerminalApp::implementation
     {
         return _root ? _root->TitlebarOverlayMode() : false;
     }
+
+    double TerminalWindow::TitlebarOverlayLeftInset()
+    {
+        return _root ? _root->TitlebarOverlayLeftInset() : 0.0;
+    }
     winrt::Windows::UI::Xaml::Media::Brush TerminalWindow::FrameBrush()
     {
         return _root ? _root->FrameBrush() : nullptr;

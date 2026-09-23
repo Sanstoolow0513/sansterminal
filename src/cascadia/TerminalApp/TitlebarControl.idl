@@ -24,6 +24,7 @@ namespace TerminalApp
         void SetWindowVisualState(WindowVisualState visualState);
         void FullscreenChanged(Boolean fullscreen);
         void SetOverlayMode(Boolean overlay);
+        void SetOverlayLeftInset(Double inset);
 
         void HoverButton(CaptionButton button);
         void PressButton(CaptionButton button);

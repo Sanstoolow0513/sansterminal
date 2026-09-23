@@ -5795,7 +5795,6 @@ namespace winrt::TerminalApp::implementation
         {
             SideTabColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
         }
-        SideTabDividerColumn().Width(GridLengthHelper::FromValueAndType(show ? 6.0 : 0.0, GridUnitType::Pixel));
         if (const auto overlay = SideTabOverlay())
         {
             overlay.Visibility(show ? Visibility::Visible : Visibility::Collapsed);
@@ -5805,6 +5804,13 @@ namespace winrt::TerminalApp::implementation
         {
             icon.Glyph(show ? L"\xE89F" : L"\xE8A0");
         }
+        SideTabDockCard().Visibility(show ? Visibility::Collapsed : Visibility::Visible);
+        SideTabDock().Opacity(show ? 1.0 : 0.75);
+
+        // Keep the window's drag region off the sidebar toolbar (open) or
+        // just the floating toggle (collapsed).
+        static constexpr auto collapsedDockInset = 56.0;
+        TitlebarOverlayLeftInset(show ? _sideTabWidth : collapsedDockInset);
     }
 
     void TerminalPage::_ResizeSideTabColumn(double requestedWidth)
@@ -5815,10 +5821,11 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        const auto minimumWidth = std::min(160.0, std::max(0.0, availableWidth - 6.0) * 0.4);
-        const auto maximumWidth = std::max(minimumWidth, availableWidth - 326.0);
+        const auto minimumWidth = std::min(160.0, availableWidth * 0.4);
+        const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
         _sideTabWidth = std::clamp(requestedWidth, minimumWidth, maximumWidth);
         SideTabColumn().Width(GridLengthHelper::FromValueAndType(_sideTabWidth, GridUnitType::Pixel));
+        TitlebarOverlayLeftInset(_sideTabWidth);
     }
 
     void TerminalPage::_SideTabLayoutSizeChanged(const IInspectable& /*sender*/, const WUX::SizeChangedEventArgs& /*e*/)
@@ -5841,7 +5848,9 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_SideTabDockPointerExited(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
     {
-        SideTabDock().Opacity(0.65);
+        // Only the floating card fades; in the open sidebar the toggle is a
+        // regular toolbar button.
+        SideTabDock().Opacity(_sideTabOverlayOpen ? 1.0 : 0.75);
     }
 
     void TerminalPage::_SideTabDividerDragStarted(const IInspectable& /*sender*/, const WUX::Controls::Primitives::DragStartedEventArgs& /*e*/)
@@ -5853,6 +5862,37 @@ namespace winrt::TerminalApp::implementation
     {
         _sideTabDragWidth += e.HorizontalChange();
         _ResizeSideTabColumn(_sideTabDragWidth);
+    }
+
+    void TerminalPage::_SideTabDividerDragCompleted(const IInspectable& /*sender*/, const WUX::Controls::Primitives::DragCompletedEventArgs& /*e*/)
+    {
+        // PointerExited is suppressed while the Thumb holds pointer capture,
+        // so settle the cursor once the drag ends.
+        _SetSideTabDividerCursor(_sideTabDividerHovered);
+    }
+
+    void TerminalPage::_SideTabDividerPointerEntered(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*e*/)
+    {
+        _sideTabDividerHovered = true;
+        _SetSideTabDividerCursor(true);
+    }
+
+    void TerminalPage::_SideTabDividerPointerExited(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*e*/)
+    {
+        _sideTabDividerHovered = false;
+        if (!SideTabDivider().IsDragging())
+        {
+            _SetSideTabDividerCursor(false);
+        }
+    }
+
+    // The resize handle draws nothing, so the pointer cursor is its only cue.
+    void TerminalPage::_SetSideTabDividerCursor(const bool resize)
+    {
+        if (const auto window = CoreWindow::GetForCurrentThread())
+        {
+            window.PointerCursor(Windows::UI::Core::CoreCursor{ resize ? Windows::UI::Core::CoreCursorType::SizeWestEast : Windows::UI::Core::CoreCursorType::Arrow, 0 });
+        }
     }
 
     // Rebuild the workspace flyout contents. Called every time the flyout opens

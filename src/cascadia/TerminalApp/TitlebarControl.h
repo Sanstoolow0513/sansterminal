@@ -27,6 +27,7 @@ namespace winrt::TerminalApp::implementation
         void Root_SizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& e);
         void FullscreenChanged(const bool fullscreen);
         void SetOverlayMode(const bool overlay);
+        void SetOverlayLeftInset(const double inset);
 
         void Minimize_Click(const winrt::Windows::Foundation::IInspectable& sender, const winrt::Windows::UI::Xaml::RoutedEventArgs& e);
         void Maximize_Click(const winrt::Windows::Foundation::IInspectable& sender, const winrt::Windows::UI::Xaml::RoutedEventArgs& e);
@@ -37,6 +38,7 @@ namespace winrt::TerminalApp::implementation
         void _OnMaximizeOrRestore(byte flag);
         HWND _window{ nullptr }; // non-owning handle; should not be freed in the dtor.
         bool _overlayMode{ false };
+        double _overlayLeftInset{ 148.0 };
 
         void _backgroundChanged(winrt::Windows::UI::Xaml::Media::Brush brush);
     };

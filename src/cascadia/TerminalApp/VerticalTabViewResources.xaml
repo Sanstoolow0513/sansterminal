@@ -14,20 +14,16 @@
     -->
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Dark">
-            <SolidColorBrush x:Key="SideTabRailBrush"
-                             Color="{ThemeResource SystemAccentColor}" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackground"
                              Color="Transparent" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackgroundSelected"
-                             Color="#24FFFFFF" />
+                             Color="#2AFFFFFF" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackgroundPointerOver"
                              Color="#14FFFFFF" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackgroundPressed"
                              Color="#2EFFFFFF" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
-            <SolidColorBrush x:Key="SideTabRailBrush"
-                             Color="{ThemeResource SystemAccentColor}" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackground"
                              Color="Transparent" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackgroundSelected"
@@ -38,8 +34,6 @@
                              Color="#1F000000" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="HighContrast">
-            <StaticResource x:Key="SideTabRailBrush"
-                            ResourceKey="SystemColorHighlightTextColorBrush" />
             <SolidColorBrush x:Key="TabViewItemHeaderBackground"
                              Color="Transparent" />
             <StaticResource x:Key="TabViewItemHeaderBackgroundSelected"
@@ -129,8 +123,8 @@
     </Style>
 
     <!--
-        Sidebar sessions. These are list rows, not horizontal tabs: a left
-        accent marks the selection, and the fill stays quiet so the rows
+        Sidebar sessions. These are list rows, not horizontal tabs: the
+        selection is a quiet rounded fill plus a semibold title, so the rows
         don't look like the window-switcher menu.
 
         WinUI 2.8 still looks up SelectedBackgroundPath, ContentPresenter
@@ -195,8 +189,6 @@
                                 </VisualState>
                                 <VisualState x:Name="Selected">
                                     <VisualState.Setters>
-                                        <Setter Target="SelectionRail.Opacity"
-                                                Value="1" />
                                         <Setter Target="TabContainer.Background"
                                                 Value="{ThemeResource TabViewItemHeaderBackgroundSelected}" />
                                         <Setter Target="ContentPresenter.Foreground"
@@ -213,8 +205,6 @@
                                 </VisualState>
                                 <VisualState x:Name="PointerOverSelected">
                                     <VisualState.Setters>
-                                        <Setter Target="SelectionRail.Opacity"
-                                                Value="1" />
                                         <Setter Target="TabContainer.Background"
                                                 Value="{ThemeResource TabViewItemHeaderBackgroundSelected}" />
                                         <Setter Target="ContentPresenter.Foreground"
@@ -231,8 +221,6 @@
                                 </VisualState>
                                 <VisualState x:Name="PressedSelected">
                                     <VisualState.Setters>
-                                        <Setter Target="SelectionRail.Opacity"
-                                                Value="1" />
                                         <Setter Target="TabContainer.Background"
                                                 Value="{ThemeResource TabViewItemHeaderBackgroundPressed}" />
                                         <Setter Target="ContentPresenter.Foreground"
@@ -359,30 +347,15 @@
                                   Data="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=TabViewTemplateSettings.TabGeometry}" />
                         </Canvas>
 
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <!--  Always reserved, so selecting a row doesn't shift the title.  -->
-                            <Border x:Name="SelectionRail"
-                                    Width="3"
-                                    Margin="0,8,8,8"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Stretch"
-                                    CornerRadius="1.5"
-                                    Opacity="0"
-                                    Background="{ThemeResource SideTabRailBrush}" />
-                            <Border x:Name="TabContainer"
-                                    Grid.Column="1"
-                                    Padding="8,0,4,0"
-                                    VerticalAlignment="Stretch"
-                                    Background="{TemplateBinding Background}"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="8"
-                                    Control.IsTemplateFocusTarget="True">
-                                <Grid>
+                        <Border x:Name="TabContainer"
+                                Padding="10,0,4,0"
+                                VerticalAlignment="Stretch"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Control.IsTemplateFocusTarget="True">
+                            <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition x:Name="IconColumn"
                                                       Width="Auto" />
@@ -421,9 +394,8 @@
                                         IsTabStop="False"
                                         IsTextScaleFactorEnabled="False"
                                         Style="{StaticResource VerticalTabViewCloseButtonStyle}" />
-                                </Grid>
-                            </Border>
-                        </Grid>
+                            </Grid>
+                        </Border>
                     </Grid>
                 </ControlTemplate>
             </Setter.Value>

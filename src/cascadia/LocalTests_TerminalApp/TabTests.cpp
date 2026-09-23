@@ -242,8 +242,8 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(first.ActualWidth() <= row.ActualWidth());
             VERIFY_IS_TRUE(first.ActualHeight() >= 36.0);
 
-            // Sidebar rows carry a selection rail. It is visible only on the
-            // selected tab, and it lives in the item template.
+            // Sidebar rows mark the selection with a fill only; there is no
+            // accent rail in the item template.
             const auto findNamed = [](DependencyObject root, winrt::hstring const& name) -> winrt::Windows::UI::Xaml::FrameworkElement {
                 std::vector<DependencyObject> pending{ root };
                 while (!pending.empty())
@@ -261,21 +261,23 @@ namespace TerminalAppLocalTests
                 }
                 return nullptr;
             };
-            const auto selectedRail = findNamed(first, L"SelectionRail");
-            const auto idleRail = findNamed(second, L"SelectionRail");
-            VERIFY_IS_NOT_NULL(selectedRail);
-            VERIFY_IS_NOT_NULL(idleRail);
-            VERIFY_IS_TRUE(selectedRail.Opacity() > 0.5);
-            VERIFY_IS_TRUE(idleRail.Opacity() < 0.5);
+            VERIFY_IS_NOT_NULL(findNamed(first, L"TabContainer"));
+            VERIFY_IS_NULL(findNamed(first, L"SelectionRail"));
+            VERIFY_IS_NULL(findNamed(second, L"SelectionRail"));
 
-            // The window switcher is a footer under the session list, and it
-            // stretches across the sidebar.
+            // The sidebar header is a two-row toolbar above the session list:
+            // the new tab button first, then the full-width window switcher.
             VERIFY_IS_TRUE(row.IsVertical());
-            const auto button = winrt::get_self<winrt::TerminalApp::implementation::TabRowControl>(row)->WorkspaceDropdown();
+            const auto rowImpl = winrt::get_self<winrt::TerminalApp::implementation::TabRowControl>(row);
+            const auto button = rowImpl->WorkspaceDropdown();
             const auto buttonPosition = button.TransformToVisual(row).TransformPoint({});
-            VERIFY_IS_TRUE(buttonPosition.Y > firstPosition.Y);
-            VERIFY_IS_TRUE(buttonPosition.Y > row.ActualHeight() * 0.5);
+            VERIFY_IS_TRUE(buttonPosition.Y + button.ActualHeight() <= firstPosition.Y);
             VERIFY_IS_TRUE(button.ActualWidth() > row.ActualWidth() * 0.7);
+            const auto newTab = rowImpl->NewTabButton();
+            const auto newTabPosition = newTab.TransformToVisual(row).TransformPoint({});
+            VERIFY_IS_TRUE(newTabPosition.Y + newTab.ActualHeight() <= buttonPosition.Y);
+            VERIFY_IS_TRUE(newTabPosition.X > row.ActualWidth() * 0.5);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, rowImpl->FooterChrome().Visibility());
 
             // Inspect the actual scroll viewport, not just the declared style.
             ScrollViewer scroller{ nullptr };
@@ -518,13 +520,23 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->SideTabDockButton().ActualWidth() >= 36.0);
             VERIFY_IS_TRUE(page->SideTabDockButton().ActualHeight() >= 36.0);
             VERIFY_ARE_EQUAL(1u, page->_tabContent.Children().Size());
-            VERIFY_ARE_EQUAL(2, Grid::GetColumn(page->_tabContent));
+            VERIFY_ARE_EQUAL(1, Grid::GetColumn(page->_tabContent));
             VERIFY_IS_TRUE(page->_tabContent.ActualHeight() > 0.0);
             VERIFY_ARE_EQUAL(200.0, page->SideTabColumn().ActualWidth());
-            VERIFY_ARE_EQUAL(6.0, page->SideTabDividerColumn().ActualWidth());
             VERIFY_IS_TRUE(page->_tabContent.ActualWidth() < page->ActualWidth());
-            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 206.0 - page->ActualWidth()) < 1.0);
+            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 200.0 - page->ActualWidth()) < 1.0);
             VERIFY_ARE_EQUAL(page->ActualHeight(), page->_tabContent.ActualHeight());
+
+            // The sidebar meets the terminal without a gap. The resize handle
+            // is an invisible strip over the terminal's leading edge.
+            const auto dividerPosition = page->SideTabDivider().TransformToVisual(page->SideTabLayout()).TransformPoint({});
+            VERIFY_ARE_EQUAL(200.0, dividerPosition.X);
+            VERIFY_ARE_EQUAL(6.0, page->SideTabDivider().ActualWidth());
+
+            // The open sidebar's toggle sits flat in its toolbar, and the
+            // window's drag region starts past the sidebar.
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDockCard().Visibility());
+            VERIFY_ARE_EQUAL(200.0, page->TitlebarOverlayLeftInset());
 
             // Notifications float below the top controls in titlebar-overlay
             // mode instead of reserving a blank 48-DIP row above the terminal.
@@ -540,7 +552,9 @@ namespace TerminalAppLocalTests
             page->_SideTabDividerDragDelta(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs{ -20.0, 0.0 });
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(180.0, page->SideTabColumn().ActualWidth());
-            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 186.0 - page->ActualWidth()) < 1.0);
+            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 180.0 - page->ActualWidth()) < 1.0);
+            VERIFY_ARE_EQUAL(180.0, page->TitlebarOverlayLeftInset());
+            page->_SideTabDividerDragCompleted(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs{ -20.0, 0.0, false });
             page->_ShowSideTabOverlay(false);
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabOverlay().Visibility());
@@ -548,15 +562,26 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(0.0, page->SideTabColumn().ActualWidth());
             VERIFY_ARE_EQUAL(page->ActualWidth(), page->_tabContent.ActualWidth());
             VERIFY_ARE_EQUAL(L"\xE8A0", page->SideTabDockIcon().Glyph());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDockCard().Visibility());
+            VERIFY_ARE_EQUAL(56.0, page->TitlebarOverlayLeftInset());
             page->_ShowSideTabOverlay(true);
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
             VERIFY_ARE_EQUAL(L"\xE89F", page->SideTabDockIcon().Glyph());
             VERIFY_ARE_EQUAL(180.0, page->SideTabPanel().ActualWidth());
+            VERIFY_ARE_EQUAL(180.0, page->TitlebarOverlayLeftInset());
             VERIFY_IS_TRUE(page->_tabRow.ActualWidth() > 150.0);
+
+            // The toggle shares the sidebar toolbar row with the new tab
+            // button; the window switcher sits below both.
             const auto dockPosition = page->SideTabDock().TransformToVisual(page->Root()).TransformPoint({});
-            const auto panelPosition = page->SideTabPanel().TransformToVisual(page->Root()).TransformPoint({});
-            VERIFY_IS_TRUE(dockPosition.Y + page->SideTabDock().ActualHeight() <= panelPosition.Y);
+            const auto newTabPosition = page->_newTabButton.TransformToVisual(page->Root()).TransformPoint({});
+            const auto switcherPosition = page->_workspaceDropdown.TransformToVisual(page->Root()).TransformPoint({});
+            const auto dockCenter = dockPosition.Y + page->SideTabDock().ActualHeight() / 2;
+            const auto newTabCenter = newTabPosition.Y + page->_newTabButton.ActualHeight() / 2;
+            VERIFY_IS_TRUE(std::abs(dockCenter - newTabCenter) < 2.0);
+            VERIFY_IS_TRUE(newTabPosition.X > dockPosition.X + page->SideTabDock().ActualWidth());
+            VERIFY_IS_TRUE(dockPosition.Y + page->SideTabDock().ActualHeight() <= switcherPosition.Y);
 
             // Selecting a tab must leave the docked sidebar in place.
             page->_tabView.SelectedIndex(-1);

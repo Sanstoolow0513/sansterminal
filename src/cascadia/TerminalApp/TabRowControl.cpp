@@ -45,30 +45,51 @@ namespace winrt::TerminalApp::implementation
         TabView().VerticalAlignment(WUX::VerticalAlignment::Stretch);
         VerticalContentAlignment(WUX::VerticalAlignment::Stretch);
 
-        // The window switcher is a window-level control. In the sidebar it
-        // sits under the session list, and its menu opens upward, so the
-        // menu and the tabs don't read as one list.
+        // The sidebar header is a two-row toolbar above the session list:
+        //   row 0: [page-owned sidebar toggle] ... [new tab]
+        //   row 1: [window switcher, full width]
+        // TerminalPage floats the sidebar toggle over the leading edge of
+        // row 0 (SideTabDock), so that space stays empty here.
         IsVertical(true);
 
-        uint32_t index = 0;
-        if (HeaderChrome().Children().IndexOf(WorkspaceDropdown(), index))
-        {
-            HeaderChrome().Children().RemoveAt(index);
-            FooterChrome().Children().Append(WorkspaceDropdown());
-        }
+        static constexpr auto toolbarRowHeight = 52.0;
+        static constexpr auto sidebarToggleSlot = 52.0;
 
-        WorkspaceDropdown().HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
-        WorkspaceDropdown().HorizontalContentAlignment(WUX::HorizontalAlignment::Stretch);
-        WorkspaceDropdown().VerticalAlignment(WUX::VerticalAlignment::Center);
-        WorkspaceDropdown().Height(44);
-        WorkspaceDropdown().Margin(WUX::ThicknessHelper::FromLengths(8, 4, 8, 8));
-        WorkspaceDropdown().Padding(WUX::ThicknessHelper::FromLengths(12, 0, 10, 0));
-        WorkspaceDropdown().CornerRadius(WUX::CornerRadius{ 8, 8, 8, 8 });
+        const auto header = HeaderChrome();
+        header.RowDefinitions().GetAt(0).Height(WUX::GridLengthHelper::FromPixels(toolbarRowHeight));
+        HeaderChromeFillColumn().Width(WUX::GridLengthHelper::FromValueAndType(1, WUX::GridUnitType::Star));
+
+        ElevationShieldIcon().Margin(WUX::ThicknessHelper::FromLengths(sidebarToggleSlot, 0, 0, 0));
+        ElevationShieldIcon().VerticalAlignment(WUX::VerticalAlignment::Center);
+
+        uint32_t index = 0;
+        if (FooterChrome().Children().IndexOf(NewTabButtonHost(), index))
+        {
+            FooterChrome().Children().RemoveAt(index);
+            header.Children().Append(NewTabButtonHost());
+        }
+        WUX::Controls::Grid::SetColumn(NewTabButtonHost(), 2);
+        NewTabButtonHost().Margin(WUX::ThicknessHelper::FromLengths(0, 0, 8, 0));
+        NewTabButtonHost().VerticalAlignment(WUX::VerticalAlignment::Center);
+        TabStripBottomBorder().Visibility(WUX::Visibility::Collapsed);
+        NewTabButton().Height(32);
+        NewTabButton().Margin(WUX::ThicknessHelper::FromLengths(0, 0, 0, 0));
+        FooterChrome().Visibility(WUX::Visibility::Collapsed);
+
+        const auto dropdown = WorkspaceDropdown();
+        WUX::Controls::Grid::SetRow(dropdown, 1);
+        WUX::Controls::Grid::SetColumn(dropdown, 0);
+        WUX::Controls::Grid::SetColumnSpan(dropdown, 3);
+        dropdown.HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
+        dropdown.HorizontalContentAlignment(WUX::HorizontalAlignment::Stretch);
+        dropdown.VerticalAlignment(WUX::VerticalAlignment::Center);
+        dropdown.Height(40);
+        dropdown.Margin(WUX::ThicknessHelper::FromLengths(8, 0, 8, 4));
+        dropdown.Padding(WUX::ThicknessHelper::FromLengths(12, 0, 10, 0));
+        dropdown.CornerRadius(WUX::CornerRadius{ 8, 8, 8, 8 });
         WorkspaceDropdownIcon().FontSize(14);
         SidebarWorkspaceLabelText().FontSize(13);
-        WorkspaceFlyout().Placement(WUX::Controls::Primitives::FlyoutPlacementMode::TopEdgeAlignedLeft);
-
-        NewTabButton().Margin(WUX::ThicknessHelper::FromLengths(8, 8, 8, 0));
+        WorkspaceFlyout().Placement(WUX::Controls::Primitives::FlyoutPlacementMode::BottomEdgeAlignedLeft);
     }
 
     winrt::Windows::UI::Xaml::Visibility TabRowControl::SidebarVisibility(bool isVertical)

@@ -47,6 +47,7 @@ public:
 
     void SetTitlebarBackground(winrt::Windows::UI::Xaml::Media::Brush brush);
     void SetTitlebarOverlayMode(const bool overlay);
+    void SetTitlebarOverlayLeftInset(const double inset);
     void SetShowTabsFullscreen(const bool newShowTabsFullscreen) override;
 
     virtual void UseMica(const bool newValue, const double titlebarOpacity) override;
