@@ -12,5 +12,9 @@ namespace TerminalApp
         Boolean ShowElevationShield;
         Boolean ShowWorkspacesButton;
         String WorkspaceName;
+        String SidebarWorkspaceLabel;
+        Boolean IsVertical;
+        Windows.UI.Xaml.Visibility SidebarVisibility(Boolean isVertical);
+        Windows.UI.Xaml.Visibility HorizontalWorkspaceNameVisibility(Boolean isVertical, String name);
     }
 }

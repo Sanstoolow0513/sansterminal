@@ -25,7 +25,8 @@
                              Grid.Row="0"
                              KeyUp="_KeyDownHandler" />
 
-        <StackPanel Grid.Row="1"
+        <StackPanel x:Name="InfoBarContainer"
+                    Grid.Row="1"
                     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
             <mux:InfoBar x:Name="CloseOnExitInfoBar"
                          x:Uid="CloseOnExitInfoBar"
@@ -42,14 +43,96 @@
             </mux:InfoBar>
         </StackPanel>
 
-        <Grid x:Name="TabContent"
+        <!-- Side tabs occupy a real, resizable layout column. -->
+        <Grid x:Name="SideTabLayout"
               Grid.Row="2"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch">
-            <Grid.Background>
-                <ImageBrush />
-            </Grid.Background>
+              SizeChanged="_SideTabLayoutSizeChanged">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="SideTabColumn" Width="0" />
+                <ColumnDefinition x:Name="SideTabDividerColumn" Width="0" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Grid x:Name="SideTabOverlay"
+                  Grid.Column="0"
+                  Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                  Visibility="Collapsed">
+                <Border x:Name="SideTabPanel"
+                        Margin="0,48,0,0"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch" />
+            </Grid>
+
+            <Thumb x:Name="SideTabDivider"
+                   Grid.Column="1"
+                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                   AutomationProperties.Name="Resize sidebar"
+                   ToolTipService.ToolTip="Drag to resize sidebar"
+                   DragStarted="_SideTabDividerDragStarted"
+                   DragDelta="_SideTabDividerDragDelta"
+                   Visibility="Collapsed">
+                <Thumb.Template>
+                    <ControlTemplate TargetType="Thumb">
+                        <Grid Background="{TemplateBinding Background}">
+                            <Border Width="1"
+                                    HorizontalAlignment="Center"
+                                    Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Thumb.Template>
+            </Thumb>
+
+            <Grid x:Name="TabContent"
+                  Grid.Column="2"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Stretch">
+                <Grid.Background>
+                    <ImageBrush />
+                </Grid.Background>
+            </Grid>
         </Grid>
+
+        <!--
+            The compact toggle remains available above the sidebar, even when
+            its layout column is collapsed.
+        -->
+        <Border x:Name="SideTabDock"
+                Grid.RowSpan="3"
+                Width="40"
+                Height="40"
+                Margin="8,6,0,0"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Opacity="0.75"
+                PointerEntered="_SideTabDockPointerEntered"
+                PointerExited="_SideTabDockPointerExited"
+                Translation="0,0,16"
+                Visibility="Collapsed">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <Button x:Name="SideTabDockButton"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Padding="0"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    VerticalContentAlignment="Center"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Click="_SideTabDockClick">
+                <!--  E8A0/E89F are the OpenPane/ClosePane glyphs.  -->
+                <FontIcon x:Name="SideTabDockIcon"
+                          FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                          FontSize="18"
+                          Glyph="&#xE8A0;" />
+            </Button>
+        </Border>
 
         <!--
             GH#12775 et. al: After switching to ControlsV2, it seems that

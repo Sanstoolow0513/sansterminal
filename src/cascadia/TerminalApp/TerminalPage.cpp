@@ -359,9 +359,9 @@ namespace winrt::TerminalApp::implementation
         _workspaceFlyout = tabRowImpl->WorkspaceFlyout();
         _workspaceDropdown = tabRowImpl->WorkspaceDropdown();
 
-        // Set the initial workspace name from the window name.
-        // Use raw WindowName() so unnamed windows show no text.
-        _tabRow.WorkspaceName(_WindowProperties.WindowName());
+        // Horizontal tabs show the raw window name (blank when unnamed).
+        // The sidebar footer always has a caption, including "#id (unnamed)".
+        _UpdateWorkspaceLabels();
 
         // Rebuild the workspace flyout each time it opens so it always
         // reflects the latest set of persisted workspaces.
@@ -376,31 +376,46 @@ namespace winrt::TerminalApp::implementation
 
         if (_tabPosition == Settings::Model::TabPosition::Left)
         {
-            // Side tabs: the tab row stays in the page, in a new left-hand
-            // column, with a vertical tab strip. The titlebar then only
-            // hosts the drag bar and the caption buttons.
-            auto root = this->Root();
-
-            WUX::Controls::ColumnDefinition tabsColumn{};
-            tabsColumn.Width(WUX::GridLengthHelper::FromValueAndType(1, WUX::GridUnitType::Auto));
-            WUX::Controls::ColumnDefinition contentColumn{};
-            contentColumn.Width(WUX::GridLengthHelper::FromValueAndType(1, WUX::GridUnitType::Star));
-            root.ColumnDefinitions().Append(tabsColumn);
-            root.ColumnDefinitions().Append(contentColumn);
-
-            WUX::Controls::Grid::SetRowSpan(_tabRow, static_cast<int32_t>(root.RowDefinitions().Size()));
-            for (const auto& child : root.Children())
+            // Side tabs live in a dedicated, resizable column. The terminal
+            // occupies the remaining column and never sits behind the tabs.
+            uint32_t index = 0;
+            if (this->Root().Children().IndexOf(_tabRow, index))
             {
-                if (child != _tabRow)
-                {
-                    if (const auto& frameworkElement{ child.try_as<WUX::FrameworkElement>() })
-                    {
-                        WUX::Controls::Grid::SetColumn(frameworkElement, 1);
-                    }
-                }
+                this->Root().Children().RemoveAt(index);
             }
 
+            _tabRow.HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
+            _tabRow.VerticalAlignment(WUX::VerticalAlignment::Stretch);
+            SideTabPanel().Child(_tabRow);
+
             tabRowImpl->SetVertical(true);
+
+            // Ask the host window to float the caption buttons over the
+            // content instead of reserving a titlebar row (see
+            // NonClientIslandWindow::SetTitlebarOverlayMode). Ignored by hosts
+            // without a non-client island.
+            TitlebarOverlayMode(true);
+
+            if (_currentWindowSettings().ShowTabsInTitlebar())
+            {
+                // Keep notifications below the floating chrome without giving
+                // the page a 48-DIP layout row. A margin on the original Auto
+                // row pushed the terminal down and looked like a leftover
+                // native titlebar. Put the container over the content instead.
+                const auto infoBarContainer = InfoBarContainer();
+                WUX::Controls::Grid::SetRow(infoBarContainer, 2);
+                WUX::Controls::Canvas::SetZIndex(infoBarContainer, 2);
+                infoBarContainer.VerticalAlignment(WUX::VerticalAlignment::Top);
+                infoBarContainer.Margin(WUX::ThicknessHelper::FromLengths(0, 48, 0, 0));
+            }
+
+            // Left mode starts expanded; the compact toggle can collapse the
+            // sidebar column without changing the user's chosen width.
+            _UpdateTabView();
+            if (SideTabDock().Visibility() == Visibility::Visible)
+            {
+                _ShowSideTabOverlay(true);
+            }
         }
         else if (_currentWindowSettings().ShowTabsInTitlebar())
         {
@@ -1180,6 +1195,11 @@ namespace winrt::TerminalApp::implementation
             }
         });
         _newTabButton.Flyout(newTabFlyout);
+        if (_tabPosition == Settings::Model::TabPosition::Left)
+        {
+            // The new-tab button sits at the bottom of the sidebar.
+            newTabFlyout.Placement(WUX::Controls::Primitives::FlyoutPlacementMode::TopEdgeAlignedLeft);
+        }
     }
 
     // Method Description:
@@ -5738,6 +5758,103 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    // Refresh the window-switcher caption. Horizontal tabs use the raw name
+    // and hide it when the window is unnamed. The sidebar footer always shows
+    // a label, matching the flyout entry for this window.
+    void TerminalPage::_UpdateWorkspaceLabels()
+    {
+        const auto name = _WindowProperties.WindowName();
+        _tabRow.WorkspaceName(name);
+        _tabRow.SidebarWorkspaceLabel(name.empty() ?
+                                          winrt::hstring{ RS_fmt(L"WindowListUnnamedEntry", _WindowProperties.WindowId()) } :
+                                          name);
+    }
+
+    // Method Description:
+    // - Shows or hides the side-tab layout column ("tabPosition": "left").
+    void TerminalPage::_ShowSideTabOverlay(bool show)
+    {
+        if (_tabPosition != Settings::Model::TabPosition::Left)
+        {
+            return;
+        }
+
+        _sideTabOverlayOpen = show;
+        if (show)
+        {
+            if (SideTabLayout().ActualWidth() > 0)
+            {
+                _ResizeSideTabColumn(_sideTabWidth);
+            }
+            else
+            {
+                SideTabColumn().Width(GridLengthHelper::FromValueAndType(_sideTabWidth, GridUnitType::Pixel));
+            }
+        }
+        else
+        {
+            SideTabColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+        }
+        SideTabDividerColumn().Width(GridLengthHelper::FromValueAndType(show ? 6.0 : 0.0, GridUnitType::Pixel));
+        if (const auto overlay = SideTabOverlay())
+        {
+            overlay.Visibility(show ? Visibility::Visible : Visibility::Collapsed);
+        }
+        SideTabDivider().Visibility(show ? Visibility::Visible : Visibility::Collapsed);
+        if (const auto icon = SideTabDockIcon())
+        {
+            icon.Glyph(show ? L"\xE89F" : L"\xE8A0");
+        }
+    }
+
+    void TerminalPage::_ResizeSideTabColumn(double requestedWidth)
+    {
+        const auto availableWidth = SideTabLayout().ActualWidth();
+        if (availableWidth <= 0)
+        {
+            return;
+        }
+
+        const auto minimumWidth = std::min(160.0, std::max(0.0, availableWidth - 6.0) * 0.4);
+        const auto maximumWidth = std::max(minimumWidth, availableWidth - 326.0);
+        _sideTabWidth = std::clamp(requestedWidth, minimumWidth, maximumWidth);
+        SideTabColumn().Width(GridLengthHelper::FromValueAndType(_sideTabWidth, GridUnitType::Pixel));
+    }
+
+    void TerminalPage::_SideTabLayoutSizeChanged(const IInspectable& /*sender*/, const WUX::SizeChangedEventArgs& /*e*/)
+    {
+        if (_sideTabOverlayOpen)
+        {
+            _ResizeSideTabColumn(_sideTabWidth);
+        }
+    }
+
+    void TerminalPage::_SideTabDockClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*args*/)
+    {
+        _ShowSideTabOverlay(!_sideTabOverlayOpen);
+    }
+
+    void TerminalPage::_SideTabDockPointerEntered(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
+    {
+        SideTabDock().Opacity(1.0);
+    }
+
+    void TerminalPage::_SideTabDockPointerExited(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
+    {
+        SideTabDock().Opacity(0.65);
+    }
+
+    void TerminalPage::_SideTabDividerDragStarted(const IInspectable& /*sender*/, const WUX::Controls::Primitives::DragStartedEventArgs& /*e*/)
+    {
+        _sideTabDragWidth = _sideTabWidth;
+    }
+
+    void TerminalPage::_SideTabDividerDragDelta(const IInspectable& /*sender*/, const WUX::Controls::Primitives::DragDeltaEventArgs& e)
+    {
+        _sideTabDragWidth += e.HorizontalChange();
+        _ResizeSideTabColumn(_sideTabDragWidth);
+    }
+
     // Rebuild the workspace flyout contents. Called every time the flyout opens
     // so it reflects the current set of persisted workspaces.
     void TerminalPage::_PopulateWorkspaceFlyout()
@@ -5955,8 +6072,9 @@ namespace winrt::TerminalApp::implementation
         }
 
         // Keep the workspace dropdown label in sync with the window name.
-        // Use raw WindowName() so clearing the name hides the text.
-        _tabRow.WorkspaceName(_WindowProperties.WindowName());
+        // Use raw WindowName() so clearing the name hides the text on the
+        // horizontal strip. The sidebar caption falls back to the window id.
+        _UpdateWorkspaceLabels();
 
         // DON'T display the confirmation if this is the name we were
         // given on startup!

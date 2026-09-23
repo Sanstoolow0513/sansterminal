@@ -211,6 +211,18 @@ namespace winrt::TerminalApp::implementation
         // This kicks off TabView::SelectionChanged, in response to which
         // we'll attach the terminal's Xaml control to the Xaml root.
         _tabView.SelectedItem(tabViewItem);
+
+        if (_tabPosition == TabPosition::Left)
+        {
+            // WinUI may defer loading the docked TabView. Ensure its content is
+            // attached without waiting for SelectionChanged. If that event ran
+            // synchronously, the identity check makes this a no-op.
+            const auto selectedContent{ newTabImpl->Content() };
+            if (_tabContent.Children().Size() == 0 || _tabContent.Children().GetAt(0) != selectedContent)
+            {
+                _UpdatedSelectedTab(*newTabImpl);
+            }
+        }
     }
 
     // Method Description:
@@ -245,10 +257,6 @@ namespace winrt::TerminalApp::implementation
             tab.UpdateIcon(icon, iconStyle);
         }
     }
-
-    // Width of the vertical tab strip ("tabPosition": "left").
-    // Keep in sync with sideTabRowWidth in TerminalWindow.cpp.
-    static constexpr auto s_sideTabRowWidth{ 200.0 };
 
     // Method Description:
     // - Handle changes to the tab width set by the user
@@ -289,7 +297,21 @@ namespace winrt::TerminalApp::implementation
             // NaN is the special value XAML uses for "Auto" sizing.
             if (sideTabs)
             {
-                _tabRow.Width(isVisible ? s_sideTabRowWidth : 0);
+                // Hide the whole side column along with its toggle in focus
+                // mode, and restore it when the tab UI becomes visible again.
+                if (const auto dock = SideTabDock())
+                {
+                    const auto wasVisible = dock.Visibility() == Visibility::Visible;
+                    dock.Visibility(isVisible ? Visibility::Visible : Visibility::Collapsed);
+                    if (isVisible && !wasVisible)
+                    {
+                        _ShowSideTabOverlay(true);
+                    }
+                }
+                if (!isVisible)
+                {
+                    _ShowSideTabOverlay(false);
+                }
             }
             else
             {

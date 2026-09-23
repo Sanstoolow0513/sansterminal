@@ -31,6 +31,20 @@ bcz
 
 解决方案文件为 `OpenConsole.slnx`。GUI 调试时在 Visual Studio 中选择 x64 或 x86 平台，部署 `CascadiaPackage` 项目（详见 `doc/building.md`、`doc/Debugging.md`）。
 
+命令行注册已生成的松散布局（需要开发人员模式）。默认注册 `x64 Debug`：
+
+```powershell
+.\tools\register-terminal.cmd
+```
+
+指定平台与配置：
+
+```powershell
+.\tools\register-terminal.cmd x64 Release
+```
+
+等价于对 `src\cascadia\CascadiaPackage\bin\<Platform>\<Configuration>\AppX\AppxManifest.xml` 执行 `Add-AppxPackage -Register`。脚本为 `tools/Register-TerminalDev.ps1`，注册的是开发包 `WindowsTerminalDev`，与商店版 Windows Terminal 不是同一个应用。清单不存在时脚本会失败，需先生成对应配置的 `CascadiaPackage`。
+
 ## 测试
 
 测试基于 TAEF。构建完成后用 `runut /name:*<测试名>*` 运行（tools/ 目录下的包装脚本）。更多见 `doc/TAEF.md`、`doc/UniversalTest.md`、`doc/WindowsTestPasses.md`。

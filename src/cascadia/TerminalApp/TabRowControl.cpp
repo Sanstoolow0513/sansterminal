@@ -44,6 +44,46 @@ namespace winrt::TerminalApp::implementation
         TabView().Style(verticalResources.Lookup(winrt::box_value(L"VerticalTabViewStyle")).as<WUX::Style>());
         TabView().VerticalAlignment(WUX::VerticalAlignment::Stretch);
         VerticalContentAlignment(WUX::VerticalAlignment::Stretch);
+
+        // The window switcher is a window-level control. In the sidebar it
+        // sits under the session list, and its menu opens upward, so the
+        // menu and the tabs don't read as one list.
+        IsVertical(true);
+
+        uint32_t index = 0;
+        if (HeaderChrome().Children().IndexOf(WorkspaceDropdown(), index))
+        {
+            HeaderChrome().Children().RemoveAt(index);
+            FooterChrome().Children().Append(WorkspaceDropdown());
+        }
+
+        WorkspaceDropdown().HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
+        WorkspaceDropdown().HorizontalContentAlignment(WUX::HorizontalAlignment::Stretch);
+        WorkspaceDropdown().VerticalAlignment(WUX::VerticalAlignment::Center);
+        WorkspaceDropdown().Height(44);
+        WorkspaceDropdown().Margin(WUX::ThicknessHelper::FromLengths(8, 4, 8, 8));
+        WorkspaceDropdown().Padding(WUX::ThicknessHelper::FromLengths(12, 0, 10, 0));
+        WorkspaceDropdown().CornerRadius(WUX::CornerRadius{ 8, 8, 8, 8 });
+        WorkspaceDropdownIcon().FontSize(14);
+        SidebarWorkspaceLabelText().FontSize(13);
+        WorkspaceFlyout().Placement(WUX::Controls::Primitives::FlyoutPlacementMode::TopEdgeAlignedLeft);
+
+        NewTabButton().Margin(WUX::ThicknessHelper::FromLengths(8, 8, 8, 0));
+    }
+
+    winrt::Windows::UI::Xaml::Visibility TabRowControl::SidebarVisibility(bool isVertical)
+    {
+        return isVertical ? winrt::Windows::UI::Xaml::Visibility::Visible :
+                            winrt::Windows::UI::Xaml::Visibility::Collapsed;
+    }
+
+    winrt::Windows::UI::Xaml::Visibility TabRowControl::HorizontalWorkspaceNameVisibility(bool isVertical, winrt::hstring name)
+    {
+        if (isVertical || name.empty())
+        {
+            return winrt::Windows::UI::Xaml::Visibility::Collapsed;
+        }
+        return winrt::Windows::UI::Xaml::Visibility::Visible;
     }
 
     // Method Description:

@@ -1244,6 +1244,14 @@ void AppHost::_PropertyChangedHandler(const winrt::Windows::Foundation::IInspect
             _updateTheme();
         }
     }
+    else if (e.PropertyName() == L"TitlebarOverlayMode")
+    {
+        if (_useNonClientArea)
+        {
+            auto nonClientWindow{ static_cast<NonClientIslandWindow*>(_window.get()) };
+            nonClientWindow->SetTitlebarOverlayMode(_windowLogic.TitlebarOverlayMode());
+        }
+    }
     else if (e.PropertyName() == L"FrameBrush")
     {
         _updateTheme();
