@@ -31,19 +31,18 @@ bcz
 
 解决方案文件为 `OpenConsole.slnx`。GUI 调试时在 Visual Studio 中选择 x64 或 x86 平台，部署 `CascadiaPackage` 项目（详见 `doc/building.md`、`doc/Debugging.md`）。
 
-命令行注册已生成的松散布局（需要开发人员模式）。默认注册 `x64 Debug`：
+命令行部署开发包（需要开发人员模式），以 `x64 Debug` 为例，在已执行 `Set-MsBuildDevEnvironment` 的 PowerShell 7 中：
 
 ```powershell
-.\tools\register-terminal.cmd
+msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Configuration=Debug /m
+& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\DeployAppRecipe.exe" src\cascadia\CascadiaPackage\bin\x64\Debug\CascadiaPackage.build.appxrecipe
 ```
 
-指定平台与配置：
-
-```powershell
-.\tools\register-terminal.cmd x64 Release
-```
-
-等价于对 `src\cascadia\CascadiaPackage\bin\<Platform>\<Configuration>\AppX\AppxManifest.xml` 执行 `Add-AppxPackage -Register`。脚本为 `tools/Register-TerminalDev.ps1`，注册的是开发包 `WindowsTerminalDev`，与商店版 Windows Terminal 不是同一个应用。清单不存在时脚本会失败，需先生成对应配置的 `CascadiaPackage`。
+- 构建 `CascadiaPackage` 只会生成 `.msix` 并刷新 `CascadiaPackage.build.appxrecipe`，不会更新松散布局 `src\cascadia\CascadiaPackage\bin\<Platform>\<Configuration>\AppX`
+- `DeployAppRecipe.exe` 与 Visual Studio 部署的逻辑相同：更新松散布局并注册；清单有变化时会先卸载再重装，`LocalState` 中的设置会保留。`DeployAppRecipe.exe` 的路径随 VS 版本（Community/Professional/Enterprise）而不同
+- 不要直接对 `AppX\AppxManifest.xml` 执行 `Add-AppxPackage -Register`：开发包版本号固定为 `0.0.1.0`，清单变化后重复注册同一版本会失败（`0x80073CFB`）
+- 建议部署前关闭正在运行的开发版终端，避免松散布局中的文件被占用
+- 部署的是开发包 `WindowsTerminalDev`，与商店版 Windows Terminal 不是同一个应用
 
 ## 测试
 
