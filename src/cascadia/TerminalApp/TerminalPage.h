@@ -259,6 +259,8 @@ namespace winrt::TerminalApp::implementation
         til::typed_event<IInspectable, winrt::TerminalApp::WindowRequestedArgs> RequestNewWindow;
 
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, TitlebarBrush, PropertyChanged.raise, nullptr);
+        WINRT_OBSERVABLE_PROPERTY(bool, TitlebarOverlayMode, PropertyChanged.raise, false);
+        WINRT_OBSERVABLE_PROPERTY(double, TitlebarOverlayLeftInset, PropertyChanged.raise, 0.0);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, FrameBrush, PropertyChanged.raise, nullptr);
 
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, SavedActionName, PropertyChanged.raise, L"");
@@ -298,6 +300,9 @@ namespace winrt::TerminalApp::implementation
         bool _isMaximized{ false };
         bool _isAlwaysOnTop{ false };
         bool _showTabsFullscreen{ false };
+
+        // Read once when the page is created; changing "tabPosition" requires an app restart.
+        Microsoft::Terminal::Settings::Model::TabPosition _tabPosition{ Microsoft::Terminal::Settings::Model::TabPosition::Top };
 
         std::optional<uint32_t> _loadFromPersistedLayoutIdx{};
 
@@ -524,6 +529,25 @@ namespace winrt::TerminalApp::implementation
         void _UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab);
         void _UpdateBackground(const winrt::Microsoft::Terminal::Settings::Model::Profile& profile);
 
+        // Docked side tabs ("tabPosition": "left") have a user-resizable
+        // layout column and a compact collapse toggle in the top-left corner.
+        bool _sideTabOverlayOpen{ false };
+        double _sideTabWidth{ 200.0 };
+        double _sideTabDragWidth{ 200.0 };
+        void _ShowSideTabOverlay(bool show);
+        void _ResizeSideTabColumn(double requestedWidth);
+        void _SideTabLayoutSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
+        void _SideTabDockClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _SideTabDockPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _SideTabDockPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _SideTabDividerDragStarted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragStartedEventArgs& args);
+        void _SideTabDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
+        void _SideTabDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
+        void _SideTabDividerPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _SideTabDividerPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _SetSideTabDividerCursor(const bool resize);
+        bool _sideTabDividerHovered{ false };
+
         void _OnDispatchCommandRequested(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::Command& command);
         void _OnCommandLineExecutionRequested(const IInspectable& sender, const winrt::hstring& commandLine);
         void _OnSwitchToTabRequested(const IInspectable& sender, const winrt::TerminalApp::Tab& tab);
@@ -625,6 +649,7 @@ namespace winrt::TerminalApp::implementation
         void _PopulateContextMenu(const Microsoft::Terminal::Control::TermControl& control, const Microsoft::UI::Xaml::Controls::CommandBarFlyout& sender, const bool withSelection);
         void _PopulateQuickFixMenu(const Microsoft::Terminal::Control::TermControl& control, const Windows::UI::Xaml::Controls::MenuFlyout& sender);
         void _PopulateWorkspaceFlyout();
+        void _UpdateWorkspaceLabels();
         winrt::Windows::UI::Xaml::Controls::MenuFlyout _CreateRunAsAdminFlyout(int profileIndex);
 
         winrt::Microsoft::Terminal::Control::TermControl _senderOrActiveControl(const winrt::Windows::Foundation::IInspectable& sender);

@@ -93,6 +93,46 @@ namespace winrt::TerminalApp::implementation
         MinMaxCloseControl().Visibility(fullscreen ? Visibility::Collapsed : Visibility::Visible);
     }
 
+    // Method Description:
+    // - Switches between the classic full-width titlebar and a floating
+    //   overlay. In overlay mode (used by side tabs), the caption buttons hover
+    //   over the terminal content on a rounded chip, the separator line goes
+    //   away, and the drag region leaves room on the left for the page's own
+    //   floating chrome (the side-tab dock).
+    void TitlebarControl::SetOverlayMode(const bool overlay)
+    {
+        _overlayMode = overlay;
+
+        CaptionButtonsBackdrop().Opacity(overlay ? 1.0 : 0.0);
+        CaptionButtonsBackdrop().Margin(overlay ? ThicknessHelper::FromLengths(6, 4, 8, 4) : ThicknessHelper::FromLengths(0, 0, 0, 0));
+        TitlebarSeparator().Visibility(overlay ? Visibility::Collapsed : Visibility::Visible);
+        DragBar().Margin(overlay ? ThicknessHelper::FromLengths(_overlayLeftInset, 0, 0, 0) : ThicknessHelper::FromLengths(0, 0, 0, 0));
+
+        // The titlebar background is transparent in overlay mode, so it can no
+        // longer drive the light/dark decision for the button glyphs. Let the
+        // buttons follow the app theme instead; they sit on a theme-aware chip.
+        if (overlay)
+        {
+            MinMaxCloseControl().RequestedTheme(ElementTheme::Default);
+        }
+        else if (const auto background = Background())
+        {
+            _backgroundChanged(background);
+        }
+    }
+
+    // Method Description:
+    // - Sets how much room (in DIPs) the overlay drag region leaves on the
+    //   left for the page's own chrome, e.g. the open sidebar's toolbar.
+    void TitlebarControl::SetOverlayLeftInset(const double inset)
+    {
+        _overlayLeftInset = inset;
+        if (_overlayMode)
+        {
+            DragBar().Margin(ThicknessHelper::FromLengths(inset, 0, 0, 0));
+        }
+    }
+
     void TitlebarControl::_OnMaximizeOrRestore(byte flag)
     {
         POINT point1 = {};
@@ -183,6 +223,13 @@ namespace winrt::TerminalApp::implementation
 
     void TitlebarControl::_backgroundChanged(winrt::Windows::UI::Xaml::Media::Brush brush)
     {
+        if (_overlayMode)
+        {
+            // See SetOverlayMode - in overlay mode the titlebar background is
+            // transparent, and the glyphs follow the app theme instead.
+            return;
+        }
+
         // Loosely cribbed from TerminalPage::_SetNewTabButtonColor
         til::color c;
         if (auto acrylic = brush.try_as<winrt::Windows::UI::Xaml::Media::AcrylicBrush>())

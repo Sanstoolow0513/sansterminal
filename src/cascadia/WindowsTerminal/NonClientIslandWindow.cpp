@@ -113,9 +113,13 @@ LRESULT NonClientIslandWindow::_dragBarNcHitTest(const til::point pointer)
     // However, the DPI scaling might, so get the updated size of the buttons in pixels
     const auto buttonWidthInPixels{ buttonWidthInDips * GetCurrentDpiScale() };
 
+    // In overlay mode the button chip floats inset from the right edge of the
+    // window; shift the hit regions left by the same amount.
+    const auto overlayInset{ _titlebarOverlayMode ? static_cast<int>(8.0 * GetCurrentDpiScale()) : 0 };
+
     // make sure to account for the width of the window frame!
     const til::rect nonClientFrame{ GetNonClientFrame(_currentDpi) };
-    const auto rightBorder{ rcParent.right - nonClientFrame.right };
+    const auto rightBorder{ rcParent.right - nonClientFrame.right - overlayInset };
     // From the right to the left,
     // * are we in the close button?
     // * the maximize button?
@@ -397,6 +401,7 @@ void NonClientIslandWindow::Initialize()
 // - <none>
 void NonClientIslandWindow::SetContent(winrt::Windows::UI::Xaml::UIElement content)
 {
+    _clientContent = content;
     _rootGrid.Children().Append(content);
 
     // SetRow only works on FrameworkElement's, so cast it to a FWE before
@@ -405,7 +410,10 @@ void NonClientIslandWindow::SetContent(winrt::Windows::UI::Xaml::UIElement conte
     const auto fwe = content.try_as<winrt::Windows::UI::Xaml::FrameworkElement>();
     if (fwe)
     {
-        Controls::Grid::SetRow(fwe, 1);
+        // In overlay mode the content fills the whole window, with the
+        // titlebar floating on top of it.
+        Controls::Grid::SetRow(fwe, _titlebarOverlayMode ? 0 : 1);
+        Controls::Grid::SetRowSpan(fwe, _titlebarOverlayMode ? 2 : 1);
     }
 }
 
@@ -866,8 +874,9 @@ til::size NonClientIslandWindow::GetTotalNonClientExclusiveSize(UINT dpi) const 
     const auto scale = GetCurrentDpiScale();
 
     // If we have a titlebar, this is being called after we've initialized, and
-    // we can just ask that titlebar how big it wants to be.
-    const auto titleBarHeight = _titlebar ? static_cast<LONG>(_titlebar.ActualHeight()) * scale : 0;
+    // we can just ask that titlebar how big it wants to be. In overlay mode the
+    // titlebar floats over the content, so it takes no space of its own.
+    const auto titleBarHeight = (!_titlebarOverlayMode && _titlebar) ? static_cast<LONG>(_titlebar.ActualHeight()) * scale : 0;
 
     return {
         islandFrame.right - islandFrame.left,
@@ -1032,7 +1041,9 @@ void NonClientIslandWindow::_UpdateFrameMargins() const noexcept
         auto rcRest = ps.rcPaint;
         rcRest.top = topBorderHeight;
 
-        const auto backgroundBrush = _titlebar.Background();
+        // In overlay mode the titlebar's own background is transparent; paint
+        // with the stashed titlebar brush instead.
+        const auto backgroundBrush = _titlebarBrush ? _titlebarBrush : _titlebar.Background();
         const auto backgroundSolidBrush = backgroundBrush.try_as<Media::SolidColorBrush>();
         const auto backgroundAcrylicBrush = backgroundBrush.try_as<Media::AcrylicBrush>();
 
@@ -1192,7 +1203,76 @@ bool NonClientIslandWindow::_IsTitlebarVisible() const
 
 void NonClientIslandWindow::SetTitlebarBackground(winrt::Windows::UI::Xaml::Media::Brush brush)
 {
-    _titlebar.Background(brush);
+    _titlebarBrush = brush;
+    // In overlay mode the titlebar stays transparent so the content shows
+    // through around the floating caption buttons. The brush is kept for
+    // painting the window background during resizes (see _OnPaint).
+    if (!_titlebarOverlayMode)
+    {
+        _titlebar.Background(brush);
+    }
+}
+
+// Method Description:
+// - Switches the titlebar between the classic top row and a floating overlay.
+//   In overlay mode (used by side tabs), the client content spans the full
+//   window and the caption buttons float over its top-right corner.
+// Arguments:
+// - overlay: true to float the titlebar over the content.
+// Return Value:
+// - <none>
+void NonClientIslandWindow::SetTitlebarOverlayMode(const bool overlay)
+{
+    if (_titlebarOverlayMode == overlay)
+    {
+        return;
+    }
+    _titlebarOverlayMode = overlay;
+
+    if (const auto fwe = _clientContent.try_as<winrt::Windows::UI::Xaml::FrameworkElement>())
+    {
+        Controls::Grid::SetRow(fwe, overlay ? 0 : 1);
+        Controls::Grid::SetRowSpan(fwe, overlay ? 2 : 1);
+    }
+
+    if (_titlebar)
+    {
+        // The content is appended after the titlebar, so it would paint over
+        // it once they overlap. Bump the titlebar above it instead.
+        Controls::Canvas::SetZIndex(_titlebar, overlay ? 1 : 0);
+        _titlebar.SetOverlayMode(overlay);
+
+        if (overlay)
+        {
+            // A transparent brush still takes XAML pointer hits. Leave the
+            // empty titlebar area without a brush so the sidebar toggle below
+            // it can receive clicks.
+            _titlebar.Background(nullptr);
+        }
+        else
+        {
+            _titlebar.Background(_titlebarBrush);
+        }
+    }
+
+    // The drag region shrinks to make room for the page's floating chrome.
+    _ResizeDragBarWindow();
+}
+
+// Method Description:
+// - Sets how much of the overlay titlebar's left side (in DIPs) is left to the
+//   page instead of the drag region, so the page's chrome stays clickable.
+// Arguments:
+// - inset: the width to leave free, in DIPs.
+// Return Value:
+// - <none>
+void NonClientIslandWindow::SetTitlebarOverlayLeftInset(const double inset)
+{
+    if (_titlebar)
+    {
+        _titlebar.SetOverlayLeftInset(inset);
+    }
+    _ResizeDragBarWindow();
 }
 
 void NonClientIslandWindow::UseMica(const bool newValue, const double titlebarOpacity)

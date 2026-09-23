@@ -637,6 +637,10 @@ namespace winrt::TerminalApp::implementation
             proposedSize.Height += (tabRowHeight + 10) * scale;
         }
 
+        // With side tabs, the tab strip floats over the content in a
+        // dismissible overlay card, so no extra window width is reserved
+        // for it. The card's width lives on SideTabPanel in TerminalPage.xaml.
+
         return proposedSize;
     }
 
@@ -944,6 +948,16 @@ namespace winrt::TerminalApp::implementation
     winrt::Windows::UI::Xaml::Media::Brush TerminalWindow::TitlebarBrush()
     {
         return _root ? _root->TitlebarBrush() : nullptr;
+    }
+
+    bool TerminalWindow::TitlebarOverlayMode()
+    {
+        return _root ? _root->TitlebarOverlayMode() : false;
+    }
+
+    double TerminalWindow::TitlebarOverlayLeftInset()
+    {
+        return _root ? _root->TitlebarOverlayLeftInset() : 0.0;
     }
     winrt::Windows::UI::Xaml::Media::Brush TerminalWindow::FrameBrush()
     {

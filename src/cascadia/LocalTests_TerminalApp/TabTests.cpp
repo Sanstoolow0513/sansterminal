@@ -73,6 +73,8 @@ namespace TerminalAppLocalTests
 
         TEST_METHOD(CreateSimpleTerminalXamlType);
         TEST_METHOD(CreateTerminalMuxXamlType);
+        TEST_METHOD(VerticalTabViewLayout);
+        TEST_METHOD(SideTabsPageLayout);
 
         TEST_METHOD(CreateTerminalPage);
 
@@ -118,7 +120,17 @@ namespace TerminalAppLocalTests
     template<typename TFunction>
     void TestOnUIThread(const TFunction& function)
     {
-        const auto result = RunOnUIThread(function);
+        const auto result = RunOnUIThread([&]() {
+            try
+            {
+                function();
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                Log::Comment(NoThrowString().Format(L"WinRT error 0x%08X: %s", static_cast<HRESULT>(error.code()), error.message().c_str()));
+                throw;
+            }
+        });
         VERIFY_SUCCEEDED(result);
     }
 
@@ -180,6 +192,122 @@ namespace TerminalAppLocalTests
             VERIFY_IS_NOT_NULL(tabRowControl);
         });
         VERIFY_SUCCEEDED(result);
+    }
+
+    void TabTests::VerticalTabViewLayout()
+    {
+        winrt::TerminalApp::TabRowControl row{ nullptr };
+        ::details::Event loaded;
+        VERIFY_IS_TRUE(loaded.IsValid());
+
+        TestOnUIThread([&]() {
+            // Match the application's WinUI resources, including DefaultTabViewStyle.
+            Application::Current().Resources().MergedDictionaries().Append(winrt::MUX::Controls::XamlControlsResources{});
+            row = winrt::TerminalApp::TabRowControl{};
+            Log::Comment(L"Load the vertical tab resources");
+            row.SetVertical(true);
+            row.Width(200);
+            row.Height(320);
+            const auto tabView = row.TabView();
+            tabView.TabWidthMode(winrt::MUX::Controls::TabViewWidthMode::SizeToContent);
+            for (auto i = 0; i < 20; ++i)
+            {
+                winrt::MUX::Controls::TabViewItem tab;
+                tab.Header(winrt::box_value(L"A long terminal tab title that must fit in the sidebar"));
+                tabView.TabItems().Append(tab);
+            }
+            tabView.SelectedIndex(0);
+
+            // Creating a control alone does not exercise its template contract.
+            // The old vertical template fails when WinUI applies/measures it.
+            Log::Comment(L"Apply the vertical tab template");
+            tabView.ApplyTemplate();
+            row.Loaded([&](auto&&, auto&&) { loaded.Set(); });
+            Window::Current().Content(row);
+            Window::Current().Activate();
+            row.UpdateLayout();
+        });
+        VERIFY_SUCCEEDED(Thread_Wait_For(loaded.m_handle, 10000));
+
+        TestOnUIThread([&]() {
+            row.UpdateLayout();
+            const auto tabView = row.TabView();
+            const auto first = tabView.ContainerFromIndex(0).as<winrt::MUX::Controls::TabViewItem>();
+            const auto second = tabView.ContainerFromIndex(1).as<winrt::MUX::Controls::TabViewItem>();
+            const auto firstPosition = first.TransformToVisual(row).TransformPoint({});
+            const auto secondPosition = second.TransformToVisual(row).TransformPoint({});
+            VERIFY_ARE_EQUAL(firstPosition.X, secondPosition.X);
+            VERIFY_IS_TRUE(secondPosition.Y > firstPosition.Y);
+            VERIFY_IS_TRUE(first.ActualWidth() > 100.0);
+            VERIFY_IS_TRUE(first.ActualWidth() <= row.ActualWidth());
+            VERIFY_IS_TRUE(first.ActualHeight() >= 36.0);
+
+            // Sidebar rows mark the selection with a fill only; there is no
+            // accent rail in the item template.
+            const auto findNamed = [](DependencyObject root, winrt::hstring const& name) -> winrt::Windows::UI::Xaml::FrameworkElement {
+                std::vector<DependencyObject> pending{ root };
+                while (!pending.empty())
+                {
+                    const auto current = pending.back();
+                    pending.pop_back();
+                    if (const auto element = current.try_as<FrameworkElement>(); element && element.Name() == name)
+                    {
+                        return element;
+                    }
+                    for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(current); ++i)
+                    {
+                        pending.push_back(Media::VisualTreeHelper::GetChild(current, i));
+                    }
+                }
+                return nullptr;
+            };
+            VERIFY_IS_NOT_NULL(findNamed(first, L"TabContainer"));
+            VERIFY_IS_NULL(findNamed(first, L"SelectionRail"));
+            VERIFY_IS_NULL(findNamed(second, L"SelectionRail"));
+
+            // The sidebar header is a two-row toolbar above the session list:
+            // the new tab button first, then the full-width window switcher.
+            VERIFY_IS_TRUE(row.IsVertical());
+            const auto rowImpl = winrt::get_self<winrt::TerminalApp::implementation::TabRowControl>(row);
+            const auto button = rowImpl->WorkspaceDropdown();
+            const auto buttonPosition = button.TransformToVisual(row).TransformPoint({});
+            VERIFY_IS_TRUE(buttonPosition.Y + button.ActualHeight() <= firstPosition.Y);
+            VERIFY_IS_TRUE(button.ActualWidth() > row.ActualWidth() * 0.7);
+            const auto newTab = rowImpl->NewTabButton();
+            const auto newTabPosition = newTab.TransformToVisual(row).TransformPoint({});
+            VERIFY_IS_TRUE(newTabPosition.Y + newTab.ActualHeight() <= buttonPosition.Y);
+            VERIFY_IS_TRUE(newTabPosition.X > row.ActualWidth() * 0.5);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, rowImpl->FooterChrome().Visibility());
+
+            // Inspect the actual scroll viewport, not just the declared style.
+            ScrollViewer scroller{ nullptr };
+            std::vector<DependencyObject> pending{ row };
+            while (!pending.empty() && !scroller)
+            {
+                const auto current = pending.back();
+                pending.pop_back();
+                scroller = current.try_as<ScrollViewer>();
+                for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(current); ++i)
+                {
+                    pending.push_back(Media::VisualTreeHelper::GetChild(current, i));
+                }
+            }
+            VERIFY_IS_NOT_NULL(scroller);
+            VERIFY_IS_TRUE(scroller.ScrollableHeight() > 0.0);
+            VERIFY_ARE_EQUAL(0.0, scroller.ScrollableWidth());
+            VERIFY_ARE_EQUAL(ScrollMode::Enabled, scroller.VerticalScrollMode());
+
+            tabView.SelectedIndex(1);
+            VERIFY_ARE_EQUAL(second, tabView.SelectedItem().as<winrt::MUX::Controls::TabViewItem>());
+            tabView.TabItems().RemoveAt(1);
+            row.UpdateLayout();
+            VERIFY_ARE_EQUAL(19u, tabView.TabItems().Size());
+            VERIFY_IS_NOT_NULL(tabView.SelectedItem());
+
+            Window::Current().Content(nullptr);
+            row = nullptr;
+            Application::Current().Resources().MergedDictionaries().RemoveAtEnd();
+        });
     }
 
     void TabTests::CreateTerminalPage()
@@ -350,6 +478,157 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(1u, page->_tabs.Size());
         });
         VERIFY_SUCCEEDED(result);
+    }
+
+    void TabTests::SideTabsPageLayout()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:showTabsInTitlebar", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+
+        bool showTabsInTitlebar;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"showTabsInTitlebar", showTabsInTitlebar));
+        CascadiaSettings settings{ LR"({
+            "tabPosition": "left",
+            "alwaysShowTabs": true,
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{
+                "name": "Side tabs test",
+                "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+                "closeOnExit": "never"
+            }]
+        })",
+                                   {} };
+        settings.WindowSettings(L"").ShowTabsInTitlebar(showTabsInTitlebar);
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+
+        TestOnUIThread([&]() {
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
+            VERIFY_ARE_EQUAL(winrt::MUX::Controls::TabViewWidthMode::SizeToContent, page->_tabView.TabWidthMode());
+            // Side tabs ask the host window to float the caption buttons.
+            VERIFY_IS_TRUE(page->TitlebarOverlayMode());
+
+            // The sidebar starts open and occupies its own layout column.
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDivider().Visibility());
+            VERIFY_ARE_EQUAL(L"\xE89F", page->SideTabDockIcon().Glyph());
+            VERIFY_ARE_EQUAL(40.0, page->SideTabDock().ActualWidth());
+            VERIFY_ARE_EQUAL(40.0, page->SideTabDock().ActualHeight());
+            VERIFY_IS_TRUE(page->SideTabDockButton().ActualWidth() >= 36.0);
+            VERIFY_IS_TRUE(page->SideTabDockButton().ActualHeight() >= 36.0);
+            VERIFY_ARE_EQUAL(1u, page->_tabContent.Children().Size());
+            VERIFY_ARE_EQUAL(1, Grid::GetColumn(page->_tabContent));
+            VERIFY_IS_TRUE(page->_tabContent.ActualHeight() > 0.0);
+            VERIFY_ARE_EQUAL(200.0, page->SideTabColumn().ActualWidth());
+            VERIFY_IS_TRUE(page->_tabContent.ActualWidth() < page->ActualWidth());
+            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 200.0 - page->ActualWidth()) < 1.0);
+            VERIFY_ARE_EQUAL(page->ActualHeight(), page->_tabContent.ActualHeight());
+
+            // The sidebar meets the terminal without a gap. The resize handle
+            // is an invisible strip over the terminal's leading edge.
+            const auto dividerPosition = page->SideTabDivider().TransformToVisual(page->SideTabLayout()).TransformPoint({});
+            VERIFY_ARE_EQUAL(200.0, dividerPosition.X);
+            VERIFY_ARE_EQUAL(6.0, page->SideTabDivider().ActualWidth());
+
+            // The open sidebar's toggle sits flat in its toolbar, and the
+            // window's drag region starts past the sidebar.
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDockCard().Visibility());
+            VERIFY_ARE_EQUAL(200.0, page->TitlebarOverlayLeftInset());
+
+            // Notifications float below the top controls in titlebar-overlay
+            // mode instead of reserving a blank 48-DIP row above the terminal.
+            if (showTabsInTitlebar)
+            {
+                VERIFY_ARE_EQUAL(2, Grid::GetRow(page->InfoBarContainer()));
+                VERIFY_ARE_EQUAL(VerticalAlignment::Top, page->InfoBarContainer().VerticalAlignment());
+            }
+
+            // The native Thumb's drag events change the layout widths.
+            // Collapsing returns the terminal to full width; reopening retains the size.
+            page->_SideTabDividerDragStarted(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragStartedEventArgs{ 0.0, 0.0 });
+            page->_SideTabDividerDragDelta(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs{ -20.0, 0.0 });
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(180.0, page->SideTabColumn().ActualWidth());
+            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 180.0 - page->ActualWidth()) < 1.0);
+            VERIFY_ARE_EQUAL(180.0, page->TitlebarOverlayLeftInset());
+            page->_SideTabDividerDragCompleted(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs{ -20.0, 0.0, false });
+            page->_ShowSideTabOverlay(false);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabOverlay().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDivider().Visibility());
+            VERIFY_ARE_EQUAL(0.0, page->SideTabColumn().ActualWidth());
+            VERIFY_ARE_EQUAL(page->ActualWidth(), page->_tabContent.ActualWidth());
+            VERIFY_ARE_EQUAL(L"\xE8A0", page->SideTabDockIcon().Glyph());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDockCard().Visibility());
+            VERIFY_ARE_EQUAL(56.0, page->TitlebarOverlayLeftInset());
+            page->_ShowSideTabOverlay(true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
+            VERIFY_ARE_EQUAL(L"\xE89F", page->SideTabDockIcon().Glyph());
+            VERIFY_ARE_EQUAL(180.0, page->SideTabPanel().ActualWidth());
+            VERIFY_ARE_EQUAL(180.0, page->TitlebarOverlayLeftInset());
+            VERIFY_IS_TRUE(page->_tabRow.ActualWidth() > 150.0);
+
+            // The toggle shares the sidebar toolbar row with the new tab
+            // button; the window switcher sits below both.
+            const auto dockPosition = page->SideTabDock().TransformToVisual(page->Root()).TransformPoint({});
+            const auto newTabPosition = page->_newTabButton.TransformToVisual(page->Root()).TransformPoint({});
+            const auto switcherPosition = page->_workspaceDropdown.TransformToVisual(page->Root()).TransformPoint({});
+            const auto dockCenter = dockPosition.Y + page->SideTabDock().ActualHeight() / 2;
+            const auto newTabCenter = newTabPosition.Y + page->_newTabButton.ActualHeight() / 2;
+            VERIFY_IS_TRUE(std::abs(dockCenter - newTabCenter) < 2.0);
+            VERIFY_IS_TRUE(newTabPosition.X > dockPosition.X + page->SideTabDock().ActualWidth());
+            VERIFY_IS_TRUE(dockPosition.Y + page->SideTabDock().ActualHeight() <= switcherPosition.Y);
+
+            // Selecting a tab must leave the docked sidebar in place.
+            page->_tabView.SelectedIndex(-1);
+            page->_tabView.SelectedIndex(0);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
+
+            // Focus mode hides the dock and force-closes the card.
+            page->SetFocusMode(true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabOverlay().Visibility());
+            page->SetFocusMode(false);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
+
+            page->SetFullscreen(true);
+            page->SetShowTabsFullscreen(false);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDock().Visibility());
+            page->SetShowTabsFullscreen(true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
+            page->SetFullscreen(false);
+
+            // A titlebar preference must not force a single side tab to stay visible.
+            settings.WindowSettings(L"").AlwaysShowTabs(false);
+            page->_UpdateTabView();
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDock().Visibility());
+            settings.WindowSettings(L"").AlwaysShowTabs(true);
+
+            // Changing the preference affects future windows, not this page's layout.
+            settings.WindowSettings(L"").TabPosition(TabPosition::Top);
+            page->SetSettings(settings, true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(winrt::MUX::Controls::TabViewWidthMode::SizeToContent, page->_tabView.TabWidthMode());
+
+            NewTerminalArgs newTerminalArgs{};
+            VERIFY_SUCCEEDED(page->_OpenNewTab(newTerminalArgs));
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
+            VERIFY_ARE_EQUAL(1u, page->_tabContent.Children().Size());
+        });
     }
 
     void TabTests::TryDuplicateBadTab()

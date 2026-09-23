@@ -46,6 +46,8 @@ public:
     void OnApplicationThemeChanged(const winrt::Windows::UI::Xaml::ElementTheme& requestedTheme) override;
 
     void SetTitlebarBackground(winrt::Windows::UI::Xaml::Media::Brush brush);
+    void SetTitlebarOverlayMode(const bool overlay);
+    void SetTitlebarOverlayLeftInset(const double inset);
     void SetShowTabsFullscreen(const bool newShowTabsFullscreen) override;
 
     virtual void UseMica(const bool newValue, const double titlebarOpacity) override;
@@ -57,6 +59,13 @@ private:
 
     wil::unique_hbrush _backgroundBrush;
     til::color _backgroundBrushColor;
+
+    // Overlay mode (side tabs): the client content spans the full window and
+    // the titlebar floats over it. _titlebarBrush is stashed separately
+    // because the titlebar's own background stays transparent in that mode.
+    bool _titlebarOverlayMode{ false };
+    winrt::Windows::UI::Xaml::Media::Brush _titlebarBrush{ nullptr };
+    winrt::Windows::UI::Xaml::UIElement _clientContent{ nullptr };
 
     winrt::Windows::UI::Xaml::Controls::Border _dragBar{ nullptr };
     wil::unique_hwnd _dragBarWindow;

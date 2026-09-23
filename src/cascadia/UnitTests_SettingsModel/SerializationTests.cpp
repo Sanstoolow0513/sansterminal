@@ -37,6 +37,7 @@ namespace SettingsModelUnitTests
         TEST_CLASS(SerializationTests);
 
         TEST_METHOD(GlobalSettings);
+        TEST_METHOD(RoundtripTabPosition);
         TEST_METHOD(Profile);
         TEST_METHOD(ColorScheme);
         TEST_METHOD(Actions);
@@ -104,6 +105,31 @@ namespace SettingsModelUnitTests
         }
     };
 
+    void SerializationTests::RoundtripTabPosition()
+    {
+        const auto defaults = winrt::make_self<implementation::GlobalAppSettings>();
+        VERIFY_ARE_EQUAL(TabPosition::Top, defaults->TabPosition());
+        VERIFY_IS_FALSE(defaults->HasTabPosition());
+
+        for (const auto value : { "top", "left" })
+        {
+            Json::Value json{ Json::objectValue };
+            json["tabPosition"] = value;
+            const auto settings = implementation::GlobalAppSettings::FromJson(json);
+            VERIFY_IS_TRUE(settings->HasTabPosition());
+            VERIFY_ARE_EQUAL(std::string{ value }, settings->ToJson()["tabPosition"].asString());
+            VERIFY_ARE_EQUAL(settings->TabPosition(), settings->Copy()->TabPosition());
+            VERIFY_ARE_EQUAL(value == std::string_view{ "left" } ? TabPosition::Left : TabPosition::Top, settings->TabPosition());
+
+            settings->ClearTabPosition();
+            VERIFY_ARE_EQUAL(TabPosition::Top, settings->TabPosition());
+            VERIFY_IS_FALSE(settings->ToJson().isMember("tabPosition"));
+        }
+
+        const auto invalid = VerifyParseSucceeded(R"({"tabPosition":"right"})");
+        VERIFY_THROWS(implementation::GlobalAppSettings::FromJson(invalid), std::exception);
+    }
+
     void SerializationTests::GlobalSettings()
     {
         static constexpr std::string_view globalsString{ R"(
@@ -123,6 +149,7 @@ namespace SettingsModelUnitTests
                 "showTabsInTitlebar": true,
                 "showTerminalTitleInTitlebar": true,
                 "tabWidthMode": "equal",
+                "tabPosition": "left",
                 "tabSwitcherMode": "mru",
 
                 "theme": "system",

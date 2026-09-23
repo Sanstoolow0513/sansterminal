@@ -119,6 +119,7 @@
     <Page Include="SuggestionsControl.xaml" />
     <Page Include="SnippetsPaneContent.xaml" />
     <Page Include="MarkdownPaneContent.xaml" />
+    <Page Include="VerticalTabViewResources.xaml" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="app">

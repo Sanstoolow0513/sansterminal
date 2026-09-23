@@ -18,6 +18,10 @@
         here, not Transparent. This is load bearing, for showTabsInTitlebar=false.
     -->
 
+    <ContentPresenter.Resources>
+        <ResourceDictionary />
+    </ContentPresenter.Resources>
+
     <!--
         Set the padding to -1 on the bottom. This prevents a small 1px gap that
         can appear on 150% scale displays between the tab item and the content.
@@ -36,9 +40,25 @@
                  TabWidthMode="Equal">
 
         <mux:TabView.TabStripHeader>
-            <StackPanel Orientation="Horizontal">
+            <!--
+                Horizontal tabs lay these out in a single row of Auto columns.
+                Side tabs turn this into a two-row toolbar (see
+                TabRowControl::SetVertical).
+            -->
+            <Grid x:Name="HeaderChrome">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition x:Name="HeaderChromeFillColumn"
+                                      Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
                 <!--  EA18 is the "Shield" glyph  -->
-                <FontIcon x:Uid="ElevationShield"
+                <FontIcon x:Name="ElevationShieldIcon"
+                          x:Uid="ElevationShield"
                           Margin="9,4,0,4"
                           FontFamily="{ThemeResource SymbolThemeFontFamily}"
                           FontSize="16"
@@ -46,9 +66,14 @@
                           Glyph="&#xEA18;"
                           Visibility="{x:Bind ShowElevationShield, Mode=OneWay}" />
 
-                <!--  Workspace/windows button  -->
+                <!--
+                    Window switcher. Horizontal tabs keep it at the leading edge
+                    of the strip. Side tabs give it a full-width row of its own
+                    above the session list.
+                -->
                 <Button x:Name="WorkspaceDropdown"
                         x:Uid="WorkspaceDropdown"
+                        Grid.Column="1"
                         Margin="4,0,0,4"
                         Padding="8,0,0,0"
                         VerticalAlignment="Stretch"
@@ -56,31 +81,58 @@
                         BorderThickness="0"
                         Visibility="{x:Bind ShowWorkspacesButton, Mode=OneWay}">
                     <Button.Content>
-                        <StackPanel Orientation="Horizontal"
-                                    Spacing="8">
+                        <Grid VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*"
+                                                  MinWidth="0" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
                             <!--  EE40 is the "TaskViewSettings" glyph  -->
-                            <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                            <FontIcon x:Name="WorkspaceDropdownIcon"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                       FontSize="12"
                                       Glyph="&#xEE40;" />
                             <TextBlock x:Name="WorkspaceNameText"
-                                       Padding="0,0,8,0"
+                                       Grid.Column="1"
+                                       Margin="8,0,8,0"
                                        VerticalAlignment="Center"
                                        FontSize="12"
                                        Text="{x:Bind WorkspaceName, Mode=OneWay}"
-                                       Visibility="{x:Bind mtu:Converters.StringNotEmptyToVisibility(WorkspaceName), Mode=OneWay}" />
-                        </StackPanel>
+                                       Visibility="{x:Bind HorizontalWorkspaceNameVisibility(IsVertical, WorkspaceName), Mode=OneWay}" />
+                            <TextBlock x:Name="SidebarWorkspaceLabelText"
+                                       Grid.Column="2"
+                                       Margin="8,0,8,0"
+                                       VerticalAlignment="Center"
+                                       FontSize="12"
+                                       Text="{x:Bind SidebarWorkspaceLabel, Mode=OneWay}"
+                                       TextTrimming="CharacterEllipsis"
+                                       TextWrapping="NoWrap"
+                                       Visibility="{x:Bind SidebarVisibility(IsVertical), Mode=OneWay}" />
+                            <!--  E70D is ChevronDown; the sidebar menu opens downward.  -->
+                            <FontIcon Grid.Column="3"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                      FontSize="12"
+                                      Glyph="&#xE70D;"
+                                      Visibility="{x:Bind SidebarVisibility(IsVertical), Mode=OneWay}" />
+                        </Grid>
                     </Button.Content>
                     <Button.Flyout>
                         <MenuFlyout x:Name="WorkspaceFlyout" />
                     </Button.Flyout>
                 </Button>
-            </StackPanel>
+            </Grid>
         </mux:TabView.TabStripHeader>
 
         <mux:TabView.TabStripFooter>
-            <Grid>
+            <StackPanel x:Name="FooterChrome">
+            <Grid x:Name="NewTabButtonHost">
                 <!--  Remove this border after WinUI 2.8  -->
-                <Border Height="1"
+                <Border x:Name="TabStripBottomBorder"
+                        Height="1"
                         VerticalAlignment="Bottom"
                         Background="{ThemeResource CardStrokeColorDefaultBrush}" />
 
@@ -165,6 +217,7 @@
                     </mux:SplitButton.Resources>
                 </mux:SplitButton>
             </Grid>
+            </StackPanel>
         </mux:TabView.TabStripFooter>
 
     </mux:TabView>

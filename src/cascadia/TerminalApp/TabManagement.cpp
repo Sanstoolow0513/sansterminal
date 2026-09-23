@@ -211,6 +211,18 @@ namespace winrt::TerminalApp::implementation
         // This kicks off TabView::SelectionChanged, in response to which
         // we'll attach the terminal's Xaml control to the Xaml root.
         _tabView.SelectedItem(tabViewItem);
+
+        if (_tabPosition == TabPosition::Left)
+        {
+            // WinUI may defer loading the docked TabView. Ensure its content is
+            // attached without waiting for SelectionChanged. If that event ran
+            // synchronously, the identity check makes this a no-op.
+            const auto selectedContent{ newTabImpl->Content() };
+            if (_tabContent.Children().Size() == 0 || _tabContent.Children().GetAt(0) != selectedContent)
+            {
+                _UpdatedSelectedTab(*newTabImpl);
+            }
+        }
     }
 
     // Method Description:
@@ -250,20 +262,27 @@ namespace winrt::TerminalApp::implementation
     // - Handle changes to the tab width set by the user
     void TerminalPage::_UpdateTabWidthMode()
     {
-        _tabView.TabWidthMode(_currentWindowSettings().TabWidthMode());
+        // "equal" sizing is a horizontal-strip algorithm; with side tabs
+        // every row simply sizes to its content.
+        _tabView.TabWidthMode(_tabPosition == TabPosition::Left ? MUX::Controls::TabViewWidthMode::SizeToContent :
+                                                                  _currentWindowSettings().TabWidthMode());
     }
 
     // Method Description:
     // - Handle changes in tab layout.
     void TerminalPage::_UpdateTabView()
     {
+        const auto sideTabs{ _tabPosition == TabPosition::Left };
+
         // The tab row should only be visible if:
         // - we're not in focus mode
         // - we're not in full screen, or the user has enabled fullscreen tabs
         // - there is more than one tab, or the user has chosen to always show tabs
+        // Side tabs never live in the titlebar, so ShowTabsInTitlebar doesn't
+        // keep them visible on its own.
         const auto isVisible = !_isInFocusMode &&
                                (!_isFullscreen || _showTabsFullscreen) &&
-                               (_currentWindowSettings().ShowTabsInTitlebar() ||
+                               ((!sideTabs && _currentWindowSettings().ShowTabsInTitlebar()) ||
                                 (_tabs.Size() > 1) ||
                                 _currentWindowSettings().AlwaysShowTabs());
 
@@ -276,7 +295,28 @@ namespace winrt::TerminalApp::implementation
         {
             // collapse/show the row that the tabs are in.
             // NaN is the special value XAML uses for "Auto" sizing.
-            _tabRow.Height(isVisible ? NAN : 0);
+            if (sideTabs)
+            {
+                // Hide the whole side column along with its toggle in focus
+                // mode, and restore it when the tab UI becomes visible again.
+                if (const auto dock = SideTabDock())
+                {
+                    const auto wasVisible = dock.Visibility() == Visibility::Visible;
+                    dock.Visibility(isVisible ? Visibility::Visible : Visibility::Collapsed);
+                    if (isVisible && !wasVisible)
+                    {
+                        _ShowSideTabOverlay(true);
+                    }
+                }
+                if (!isVisible)
+                {
+                    _ShowSideTabOverlay(false);
+                }
+            }
+            else
+            {
+                _tabRow.Height(isVisible ? NAN : 0);
+            }
         }
     }
 
