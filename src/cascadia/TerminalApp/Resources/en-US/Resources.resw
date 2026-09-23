@@ -840,6 +840,75 @@
   <data name="WorkspaceDropdown.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>Workspaces</value>
   </data>
+  <data name="DefaultWorkspaceName" xml:space="preserve">
+    <value>Default</value>
+  </data>
+  <data name="NewWorkspaceMenuItem" xml:space="preserve">
+    <value>New workspace...</value>
+  </data>
+  <data name="OpenFolderWorkspaceMenuItem" xml:space="preserve">
+    <value>Open folder as workspace...</value>
+  </data>
+  <data name="EnterFolderPathMenuItem" xml:space="preserve">
+    <value>Enter folder path...</value>
+  </data>
+  <data name="EnterFolderPathTitle" xml:space="preserve">
+    <value>Open folder workspace</value>
+  </data>
+  <data name="OpenFolderButton" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="FolderPathPlaceholder" xml:space="preserve">
+    <value>Absolute folder path</value>
+  </data>
+  <data name="InvalidFolderPathTitle" xml:space="preserve">
+    <value>Folder not found</value>
+  </data>
+  <data name="InvalidFolderPathMessage" xml:space="preserve">
+    <value>Enter an existing absolute folder path.</value>
+  </data>
+  <data name="NewWorkspaceTitle" xml:space="preserve">
+    <value>New workspace</value>
+  </data>
+  <data name="CreateWorkspaceButton" xml:space="preserve">
+    <value>Create</value>
+  </data>
+  <data name="CancelWorkspaceButton" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="WorkspaceNamePlaceholder" xml:space="preserve">
+    <value>Workspace name</value>
+  </data>
+  <data name="WorkspaceFolderReadError" xml:space="preserve">
+    <value>Could not read this folder.</value>
+  </data>
+  <data name="WorkspaceFileReadError" xml:space="preserve">
+    <value>Could not read this file.</value>
+  </data>
+  <data name="WorkspaceBinaryFileMessage" xml:space="preserve">
+    <value>Binary files cannot be previewed.</value>
+  </data>
+  <data name="WorkspaceUnsupportedEncodingMessage" xml:space="preserve">
+    <value>This text encoding cannot be previewed.</value>
+  </data>
+  <data name="WorkspacePreviewTruncatedMessage" xml:space="preserve">
+    <value>Preview limited to the first 128 KB.</value>
+  </data>
+  <data name="WorkspaceFilesHeader.Text" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="WorkspaceChangeFolderButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="WorkspaceUpButton.Content" xml:space="preserve">
+    <value>Up</value>
+  </data>
+  <data name="WorkspaceRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="WorkspaceClosePreviewButton.Content" xml:space="preserve">
+    <value>Close</value>
+  </data>
   <data name="CommandPalette_MatchesAvailable" xml:space="preserve">
     <value>Suggestions found: {0}</value>
     <comment>{0} will be replaced with a number.</comment>

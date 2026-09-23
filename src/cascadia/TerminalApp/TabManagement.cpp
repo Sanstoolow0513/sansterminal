@@ -67,6 +67,13 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto& newTerminalArgs{ newContentArgs.try_as<NewTerminalArgs>() })
         {
+            if (newTerminalArgs.StartingDirectory().empty())
+            {
+                if (const auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+                {
+                    newTerminalArgs.StartingDirectory(winrt::hstring{ workspace->root.native() });
+                }
+            }
             const auto profile{ _settings.GetProfileForArgs(newTerminalArgs) };
             // GH#11114: GetProfileForArgs can return null if the index is higher
             // than the number of available profiles.
@@ -124,6 +131,7 @@ namespace winrt::TerminalApp::implementation
 
         // Add the new tab to the list of our tabs.
         _tabs.InsertAt(insertPosition, *newTabImpl);
+        _tabWorkspaces.emplace_back(*newTabImpl, _activeWorkspaceId);
         _mruTabs.Append(*newTabImpl);
 
         newTabImpl->SetDispatch(*_actionDispatch);
@@ -273,6 +281,9 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_UpdateTabView()
     {
         const auto sideTabs{ _tabPosition == TabPosition::Left };
+        const auto activeTabCount = std::count_if(_tabs.begin(), _tabs.end(), [this](const auto& tab) {
+            return _IsTabInActiveWorkspace(tab);
+        });
 
         // The tab row should only be visible if:
         // - we're not in focus mode
@@ -283,7 +294,9 @@ namespace winrt::TerminalApp::implementation
         const auto isVisible = !_isInFocusMode &&
                                (!_isFullscreen || _showTabsFullscreen) &&
                                ((!sideTabs && _currentWindowSettings().ShowTabsInTitlebar()) ||
-                                (_tabs.Size() > 1) ||
+                                (activeTabCount > 1) ||
+                                (_workspaces.size() > 1) ||
+                                _tabRow.ShowWorkspacesButton() ||
                                 _currentWindowSettings().AlwaysShowTabs());
 
         if (_tabView)
@@ -572,6 +585,15 @@ namespace winrt::TerminalApp::implementation
             _stashed.draggedTab = nullptr;
         }
 
+        std::erase_if(_tabWorkspaces, [&tab](const auto& entry) { return entry.first == tab; });
+        for (auto& workspace : _workspaces)
+        {
+            if (workspace.lastFocused == tab)
+            {
+                workspace.lastFocused = nullptr;
+            }
+        }
+
         _tabs.RemoveAt(tabIndex);
         _tabView.TabItems().RemoveAt(tabIndex);
         _UpdateTabIndices();
@@ -592,9 +614,31 @@ namespace winrt::TerminalApp::implementation
             // 2. In fullscreen (GH#5799) and focus (GH#7916) modes the _OnTabItemsChanged is not fired
             // 3. When rearranging tabs (GH#7916) _OnTabItemsChanged is suppressed
 
-            const auto newSelectedTab = _mruTabs.GetAt(0);
-            _UpdatedSelectedTab(newSelectedTab);
-            _tabView.SelectedItem(newSelectedTab.TabViewItem());
+            winrt::TerminalApp::Tab newSelectedTab{ nullptr };
+            for (const auto& candidate : _mruTabs)
+            {
+                if (_IsTabInActiveWorkspace(candidate))
+                {
+                    newSelectedTab = candidate;
+                    break;
+                }
+            }
+            if (newSelectedTab)
+            {
+                _UpdatedSelectedTab(newSelectedTab);
+                _tabView.SelectedItem(newSelectedTab.TabViewItem());
+            }
+            else
+            {
+                for (const auto& candidate : _tabWorkspaces)
+                {
+                    if (candidate.first)
+                    {
+                        _SwitchWorkspace(candidate.second, false);
+                        break;
+                    }
+                }
+            }
         }
 
         // GH#5559 - If we were in the middle of a drag/drop, end it by clearing
@@ -612,6 +656,25 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_SelectNextTab(const bool bMoveRight, const Windows::Foundation::IReference<Microsoft::Terminal::Settings::Model::TabSwitcherMode>& customTabSwitcherMode)
     {
         const auto index{ _GetFocusedTabIndex().value_or(0) };
+        if (_workspaces.size() > 1)
+        {
+            std::vector<uint32_t> visibleTabs;
+            for (uint32_t i = 0; i < _tabs.Size(); ++i)
+            {
+                if (_IsTabInActiveWorkspace(_tabs.GetAt(i)))
+                {
+                    visibleTabs.push_back(i);
+                }
+            }
+            if (!visibleTabs.empty())
+            {
+                const auto current = std::find(visibleTabs.begin(), visibleTabs.end(), index);
+                const auto position = current == visibleTabs.end() ? 0 : static_cast<size_t>(std::distance(visibleTabs.begin(), current));
+                const auto next = (position + (bMoveRight ? 1 : visibleTabs.size() - 1)) % visibleTabs.size();
+                _SelectTab(visibleTabs[next]);
+            }
+            return;
+        }
         const auto tabSwitchMode = customTabSwitcherMode ? customTabSwitcherMode.Value() : _currentWindowSettings().TabSwitcherMode();
         if (tabSwitchMode == TabSwitcherMode::Disabled)
         {
@@ -654,6 +717,10 @@ namespace winrt::TerminalApp::implementation
         tabIndex = std::clamp(tabIndex, 0u, _tabs.Size() - 1);
 
         auto tab{ _tabs.GetAt(tabIndex) };
+        if (!_IsTabInActiveWorkspace(tab))
+        {
+            _SwitchWorkspace(_WorkspaceForTab(tab), false);
+        }
         // GH#11107 - Always just set the item directly first so that if
         // tab movement is done as part of multiple actions following calls
         // to _GetFocusedTab will return the correct tab.
@@ -1131,6 +1198,10 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab)
     {
+        if (auto workspace = _FindWorkspace(_WorkspaceForTab(tab)))
+        {
+            workspace->lastFocused = tab;
+        }
         // Unfocus all the tabs.
         for (const auto& tab : _tabs)
         {
@@ -1195,14 +1266,17 @@ namespace winrt::TerminalApp::implementation
     // - eventArgs: the event's constituent arguments
     void TerminalPage::_OnTabSelectionChanged(const IInspectable& sender, const WUX::Controls::SelectionChangedEventArgs& /*eventArgs*/)
     {
-        if (!_rearranging && !_removing)
+        if (!_rearranging && !_removing && !_changingWorkspace)
         {
             auto tabView = sender.as<MUX::Controls::TabView>();
             auto selectedIndex = tabView.SelectedIndex();
             if (selectedIndex >= 0 && selectedIndex < gsl::narrow_cast<int32_t>(_tabs.Size()))
             {
                 const auto tab{ _tabs.GetAt(selectedIndex) };
-                _UpdatedSelectedTab(tab);
+                if (_IsTabInActiveWorkspace(tab))
+                {
+                    _UpdatedSelectedTab(tab);
+                }
             }
         }
     }

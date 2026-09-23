@@ -24,6 +24,8 @@
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
 
+#include <fstream>
+
 #include "LaunchPositionRequest.g.cpp"
 #include "WindowListEntry.g.cpp"
 #include "WindowListRequest.g.cpp"
@@ -358,6 +360,14 @@ namespace winrt::TerminalApp::implementation
         _newTabButton = tabRowImpl->NewTabButton();
         _workspaceFlyout = tabRowImpl->WorkspaceFlyout();
         _workspaceDropdown = tabRowImpl->WorkspaceDropdown();
+
+        // A restored window starts with one workspace. Further workspaces keep
+        // their tabs alive in this same TabView and hide them while inactive.
+        const auto initialName = _WindowProperties.WindowName();
+        _activeWorkspaceId = initialName.empty() ? L"__default_workspace__" : initialName;
+        _workspaces.push_back({ _activeWorkspaceId,
+                                initialName.empty() ? RS_(L"DefaultWorkspaceName") : initialName,
+                                {}, {}, nullptr });
 
         // Horizontal tabs show the raw window name (blank when unnamed).
         // The sidebar footer always has a caption, including "#id (unnamed)".
@@ -810,6 +820,13 @@ namespace winrt::TerminalApp::implementation
         //
         // See GH#13136.
         auto suspend = _tabs.Size() > 0;
+        // A persisted layout uses openWorkspace actions as group markers. A
+        // one-action layout is the older stub that asks us to load a saved
+        // workspace, so it must still go through the normal action handler.
+        const bool hasWorkspaceMarkers = actions.size() > 1 &&
+                                         std::any_of(actions.begin(), actions.end(), [](const auto& action) {
+                                             return action.Action() == ShortcutAction::OpenWorkspace;
+                                         });
 
         for (size_t i = 0; i < actions.size(); ++i)
         {
@@ -818,8 +835,20 @@ namespace winrt::TerminalApp::implementation
                 co_await wil::resume_foreground(Dispatcher(), CoreDispatcherPriority::Low);
             }
 
-            _actionDispatch->DoAction(actions[i]);
-            suspend = true;
+            if (hasWorkspaceMarkers && actions[i].Action() == ShortcutAction::OpenWorkspace)
+            {
+                if (const auto marker = actions[i].Args().try_as<OpenWorkspaceArgs>())
+                {
+                    _SwitchWorkspace(marker.Name(), false);
+                }
+            }
+            else
+            {
+                _actionDispatch->DoAction(actions[i]);
+            }
+            // Workspace markers do not create a tab. The first real tab must
+            // still be created synchronously during startup.
+            suspend = _tabs.Size() > 0;
         }
 
         // GH#6586: now that we're done processing all startup commands,
@@ -2380,22 +2409,39 @@ namespace winrt::TerminalApp::implementation
 
         std::vector<ActionAndArgs> actions;
 
+        const bool persistWorkspaceGroups = _workspaces.size() > 1 ||
+                                            (!_workspaces.empty() && !_workspaces.front().root.empty());
+        winrt::hstring previousWorkspace;
+        bool firstTab = true;
+        bool hasTabActions = false;
+
         for (auto tab : _tabs)
         {
+            const auto workspaceId = _WorkspaceForTab(tab);
+            if (persistWorkspaceGroups && (firstTab || workspaceId != previousWorkspace))
+            {
+                ActionAndArgs marker;
+                marker.Action(ShortcutAction::OpenWorkspace);
+                marker.Args(OpenWorkspaceArgs{ workspaceId });
+                actions.emplace_back(std::move(marker));
+            }
+            previousWorkspace = workspaceId;
+            firstTab = false;
             auto t = winrt::get_self<implementation::Tab>(tab);
             auto tabActions = t->BuildStartupActions(BuildStartupKind::Persist);
+            hasTabActions = hasTabActions || !tabActions.empty();
             actions.insert(actions.end(), std::make_move_iterator(tabActions.begin()), std::make_move_iterator(tabActions.end()));
         }
 
         // Avoid persisting a window with zero tabs, because `BuildStartupActions` happened to return an empty vector.
-        if (actions.empty())
+        if (!hasTabActions)
         {
             return nullptr;
         }
 
         // if the focused tab was not the last tab, restore that
         auto idx = _GetFocusedTabIndex();
-        if (idx && idx != tabCount - 1)
+        if (idx && (persistWorkspaceGroups || idx != tabCount - 1))
         {
             ActionAndArgs action;
             action.Action(ShortcutAction::SwitchToTab);
@@ -5758,16 +5804,468 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    // Refresh the window-switcher caption. Horizontal tabs use the raw name
-    // and hide it when the window is unnamed. The sidebar footer always shows
-    // a label, matching the flyout entry for this window.
+    TerminalPage::WorkspaceSession* TerminalPage::_FindWorkspace(const winrt::hstring& id)
+    {
+        for (auto& workspace : _workspaces)
+        {
+            if (workspace.id == id)
+            {
+                return &workspace;
+            }
+        }
+        return nullptr;
+    }
+
+    winrt::hstring TerminalPage::_WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const
+    {
+        for (const auto& [candidate, workspaceId] : _tabWorkspaces)
+        {
+            if (candidate == tab)
+            {
+                return workspaceId;
+            }
+        }
+        return _activeWorkspaceId;
+    }
+
+    bool TerminalPage::_IsTabInActiveWorkspace(const winrt::TerminalApp::Tab& tab) const
+    {
+        return _WorkspaceForTab(tab) == _activeWorkspaceId;
+    }
+
+    void TerminalPage::_UpdateWorkspaceTabVisibility()
+    {
+        const auto wasChanging = _changingWorkspace;
+        _changingWorkspace = true;
+
+        winrt::TerminalApp::Tab selected{ nullptr };
+        if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            uint32_t index{};
+            if (workspace->lastFocused && _tabs.IndexOf(workspace->lastFocused, index))
+            {
+                selected = workspace->lastFocused;
+            }
+        }
+
+        for (const auto& tab : _tabs)
+        {
+            const bool visible = _IsTabInActiveWorkspace(tab);
+            tab.TabViewItem().Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
+            if (visible && !selected)
+            {
+                selected = tab;
+            }
+        }
+
+        if (selected)
+        {
+            _tabView.SelectedItem(selected.TabViewItem());
+        }
+        else
+        {
+            _tabView.SelectedItem(nullptr);
+            _tabContent.Children().Clear();
+        }
+        _changingWorkspace = wasChanging;
+
+        if (selected)
+        {
+            _UpdatedSelectedTab(selected);
+        }
+        _UpdateTabView();
+    }
+
+    void TerminalPage::_SwitchWorkspace(const winrt::hstring& id, bool createTabIfEmpty)
+    {
+        if (id.empty())
+        {
+            return;
+        }
+
+        auto workspace = _FindWorkspace(id);
+        if (!workspace)
+        {
+            std::filesystem::path root;
+            const std::filesystem::path candidate{ std::wstring_view{ id } };
+            std::error_code error;
+            if (candidate.is_absolute() && std::filesystem::is_directory(candidate, error))
+            {
+                root = candidate.lexically_normal();
+            }
+            const auto displayName = root.empty() ? id :
+                                     winrt::hstring{ root.filename().empty() ? root.native() : root.filename().native() };
+            _workspaces.push_back({ id, displayName, root, root, nullptr });
+            workspace = &_workspaces.back();
+        }
+
+        _activeWorkspaceId = id;
+        _UpdateWorkspaceTabVisibility();
+        _UpdateWorkspaceLabels();
+        _UpdateWorkspaceFilesUI();
+
+        if (createTabIfEmpty)
+        {
+            bool hasTab = false;
+            for (const auto& tab : _tabs)
+            {
+                if (_IsTabInActiveWorkspace(tab))
+                {
+                    hasTab = true;
+                    break;
+                }
+            }
+            if (!hasTab)
+            {
+                NewTerminalArgs args{};
+                if (!workspace->root.empty())
+                {
+                    args.StartingDirectory(winrt::hstring{ workspace->root.native() });
+                }
+                _OpenNewTab(args);
+            }
+        }
+    }
+
+    void TerminalPage::_OpenWorkspace(const winrt::hstring& id)
+    {
+        if (id.empty())
+        {
+            return;
+        }
+        if (_FindWorkspace(id))
+        {
+            _SwitchWorkspace(id);
+            return;
+        }
+
+        // Older named-window workspaces are imported into the current window.
+        // Their terminal tabs are recreated here, while existing tabs stay live.
+        if (const auto layout = ApplicationState::SharedInstance().TakeWorkspace(id))
+        {
+            _SwitchWorkspace(id, false);
+            std::vector<ActionAndArgs> actions;
+            const auto tabIndexOffset = _tabs.Size();
+            if (const auto tabLayout = layout.TabLayout())
+            {
+                for (const auto& action : tabLayout)
+                {
+                    // Keep the current physical window name and translate the
+                    // restored focus index to its position among live tabs.
+                    if (action.Action() == ShortcutAction::SwitchToTab)
+                    {
+                        if (const auto switchArgs = action.Args().try_as<SwitchToTabArgs>())
+                        {
+                            ActionAndArgs adjusted;
+                            adjusted.Action(ShortcutAction::SwitchToTab);
+                            adjusted.Args(SwitchToTabArgs{ tabIndexOffset + switchArgs.TabIndex() });
+                            actions.emplace_back(std::move(adjusted));
+                        }
+                    }
+                    else if (action.Action() != ShortcutAction::RenameWindow)
+                    {
+                        actions.push_back(action);
+                    }
+                }
+            }
+            if (!actions.empty())
+            {
+                ProcessStartupActions(std::move(actions));
+            }
+            else
+            {
+                _SwitchWorkspace(id);
+            }
+            return;
+        }
+        _SwitchWorkspace(id);
+    }
+
+    safe_void_coroutine TerminalPage::_CreateNamedWorkspace()
+    {
+        ContentDialog dialog{};
+        dialog.Title(winrt::box_value(RS_(L"NewWorkspaceTitle")));
+        dialog.PrimaryButtonText(RS_(L"CreateWorkspaceButton"));
+        dialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
+        dialog.DefaultButton(ContentDialogButton::Primary);
+        TextBox nameBox{};
+        nameBox.PlaceholderText(RS_(L"WorkspaceNamePlaceholder"));
+        dialog.Content(nameBox);
+
+        const auto weakThis = get_weak();
+        if (const auto presenter = _dialogPresenter.get())
+        {
+            if (co_await presenter.ShowDialog(dialog) == ContentDialogResult::Primary)
+            {
+                if (const auto page = weakThis.get())
+                {
+                    const auto name = nameBox.Text();
+                    if (!name.empty() && name != L"__default_workspace__")
+                    {
+                        page->_SwitchWorkspace(name);
+                    }
+                }
+            }
+        }
+    }
+
+    safe_void_coroutine TerminalPage::_PickWorkspaceFolder()
+    try
+    {
+        if (!_hostingHwnd)
+        {
+            co_return;
+        }
+        const auto weakThis = get_weak();
+        const auto folder = co_await OpenFilePicker(*_hostingHwnd, [](auto&& dialog) {
+            DWORD flags{};
+            THROW_IF_FAILED(dialog->GetOptions(&flags));
+            THROW_IF_FAILED(dialog->SetOptions(flags | FOS_PICKFOLDERS));
+        });
+        if (const auto page = weakThis.get(); page && !folder.empty())
+        {
+            page->_SwitchWorkspace(folder);
+        }
+    }
+    CATCH_LOG()
+
+    safe_void_coroutine TerminalPage::_EnterWorkspaceFolderPath()
+    {
+        ContentDialog dialog{};
+        dialog.Title(winrt::box_value(RS_(L"EnterFolderPathTitle")));
+        dialog.PrimaryButtonText(RS_(L"OpenFolderButton"));
+        dialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
+        dialog.DefaultButton(ContentDialogButton::Primary);
+        TextBox pathBox{};
+        pathBox.PlaceholderText(RS_(L"FolderPathPlaceholder"));
+        dialog.Content(pathBox);
+
+        const auto weakThis = get_weak();
+        if (const auto presenter = _dialogPresenter.get())
+        {
+            if (co_await presenter.ShowDialog(dialog) == ContentDialogResult::Primary)
+            {
+                if (const auto page = weakThis.get())
+                {
+                    const std::filesystem::path path{ std::wstring_view{ pathBox.Text() } };
+                    std::error_code error;
+                    if (path.is_absolute() && std::filesystem::is_directory(path, error))
+                    {
+                        page->_SwitchWorkspace(winrt::hstring{ path.lexically_normal().native() });
+                    }
+                    else
+                    {
+                        ContentDialog errorDialog{};
+                        errorDialog.Title(winrt::box_value(RS_(L"InvalidFolderPathTitle")));
+                        errorDialog.Content(winrt::box_value(RS_(L"InvalidFolderPathMessage")));
+                        errorDialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
+                        co_await presenter.ShowDialog(errorDialog);
+                    }
+                }
+            }
+        }
+    }
+
+    // Show the active workspace name in both tab-strip layouts.
     void TerminalPage::_UpdateWorkspaceLabels()
     {
-        const auto name = _WindowProperties.WindowName();
-        _tabRow.WorkspaceName(name);
-        _tabRow.SidebarWorkspaceLabel(name.empty() ?
-                                          winrt::hstring{ RS_fmt(L"WindowListUnnamedEntry", _WindowProperties.WindowId()) } :
-                                          name);
+        if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            _tabRow.WorkspaceName(workspace->displayName);
+            _tabRow.SidebarWorkspaceLabel(workspace->displayName);
+        }
+    }
+
+    void TerminalPage::_UpdateWorkspaceFilesUI()
+    {
+        _CloseWorkspacePreview();
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        const bool hasFolder = workspace && !workspace->root.empty();
+        WorkspaceFilesPanel().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
+        WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(hasFolder ? 235.0 : 0.0, GridUnitType::Pixel));
+        if (hasFolder)
+        {
+            _RefreshWorkspaceFiles();
+        }
+        else
+        {
+            _workspaceFileEntries.clear();
+            WorkspaceFileList().Items().Clear();
+        }
+    }
+
+    void TerminalPage::_RefreshWorkspaceFiles()
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace || workspace->root.empty())
+        {
+            return;
+        }
+
+        WorkspacePathText().Text(winrt::hstring{ workspace->currentDirectory.native() });
+        _workspaceFileEntries.clear();
+        WorkspaceFileList().Items().Clear();
+
+        std::error_code error;
+        auto iterator = std::filesystem::directory_iterator(workspace->currentDirectory,
+                                                             std::filesystem::directory_options::skip_permission_denied,
+                                                             error);
+        const std::filesystem::directory_iterator end{};
+        while (!error && iterator != end && _workspaceFileEntries.size() < 500)
+        {
+            const auto& entry = *iterator;
+            std::error_code entryError;
+            const bool isDirectory = entry.is_directory(entryError);
+            const bool isSymlink = entry.is_symlink(entryError);
+            if (!entryError && !(isDirectory && isSymlink))
+            {
+                _workspaceFileEntries.push_back({ entry.path(), isDirectory });
+            }
+            iterator.increment(error);
+        }
+
+        if (error)
+        {
+            WorkspaceFileList().Items().Append(winrt::box_value(RS_(L"WorkspaceFolderReadError")));
+            return;
+        }
+
+        std::sort(_workspaceFileEntries.begin(), _workspaceFileEntries.end(), [](const auto& left, const auto& right) {
+            if (left.isDirectory != right.isDirectory)
+            {
+                return left.isDirectory;
+            }
+            return _wcsicmp(left.path.filename().c_str(), right.path.filename().c_str()) < 0;
+        });
+
+        for (uint32_t i = 0; i < _workspaceFileEntries.size(); ++i)
+        {
+            const auto& entry = _workspaceFileEntries[i];
+            ListViewItem item{};
+            const std::wstring label = (entry.isDirectory ? L"[+] " : L"    ") + entry.path.filename().native();
+            item.Content(winrt::box_value(winrt::hstring{ label }));
+            item.Tag(winrt::box_value(i));
+            WorkspaceFileList().Items().Append(item);
+        }
+    }
+
+    void TerminalPage::_CloseWorkspacePreview()
+    {
+        WorkspacePreviewPanel().Visibility(Visibility::Collapsed);
+        WorkspacePreviewColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+        WorkspacePreviewText().Text(L"");
+    }
+
+    void TerminalPage::_PreviewWorkspaceFile(const std::filesystem::path& path)
+    {
+        WorkspacePreviewTitle().Text(winrt::hstring{ path.filename().native() });
+        WorkspacePreviewPanel().Visibility(Visibility::Visible);
+        const auto width = std::clamp(SideTabLayout().ActualWidth() * 0.35, 220.0, 420.0);
+        WorkspacePreviewColumn().Width(GridLengthHelper::FromValueAndType(width, GridUnitType::Pixel));
+
+        constexpr size_t maxPreviewBytes = 128 * 1024;
+        std::ifstream file{ path, std::ios::binary };
+        if (!file)
+        {
+            WorkspacePreviewText().Text(RS_(L"WorkspaceFileReadError"));
+            return;
+        }
+
+        std::string bytes(maxPreviewBytes + 1, '\0');
+        file.read(bytes.data(), bytes.size());
+        bytes.resize(static_cast<size_t>(file.gcount()));
+        const bool truncated = bytes.size() > maxPreviewBytes;
+        if (truncated)
+        {
+            bytes.resize(maxPreviewBytes);
+        }
+
+        winrt::hstring preview;
+        if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE)
+        {
+            std::wstring utf16;
+            for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+            {
+                utf16.push_back(static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) |
+                                                     (static_cast<unsigned char>(bytes[i + 1]) << 8)));
+            }
+            preview = winrt::hstring{ utf16 };
+        }
+        else if (std::find(bytes.begin(), bytes.end(), '\0') != bytes.end())
+        {
+            preview = RS_(L"WorkspaceBinaryFileMessage");
+        }
+        else
+        {
+            try
+            {
+                std::string_view view{ bytes };
+                if (view.starts_with("\xEF\xBB\xBF"))
+                {
+                    view.remove_prefix(3);
+                }
+                preview = winrt::to_hstring(view);
+            }
+            catch (...)
+            {
+                preview = RS_(L"WorkspaceUnsupportedEncodingMessage");
+            }
+        }
+        if (truncated)
+        {
+            preview = preview + L"\r\n\r\n" + RS_(L"WorkspacePreviewTruncatedMessage");
+        }
+        WorkspacePreviewText().Text(preview);
+    }
+
+    void TerminalPage::_WorkspaceChangeFolderClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _PickWorkspaceFolder();
+    }
+
+    void TerminalPage::_WorkspaceUpClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            if (workspace->currentDirectory != workspace->root)
+            {
+                workspace->currentDirectory = workspace->currentDirectory.parent_path();
+                _RefreshWorkspaceFiles();
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceRefreshClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _RefreshWorkspaceFiles();
+    }
+
+    void TerminalPage::_WorkspaceFileSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
+    {
+        const auto index = WorkspaceFileList().SelectedIndex();
+        if (index < 0 || static_cast<size_t>(index) >= _workspaceFileEntries.size())
+        {
+            return;
+        }
+        const auto entry = _workspaceFileEntries[index];
+        if (entry.isDirectory)
+        {
+            if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                workspace->currentDirectory = entry.path;
+                _RefreshWorkspaceFiles();
+            }
+        }
+        else
+        {
+            _PreviewWorkspaceFile(entry.path);
+            WorkspaceFileList().SelectedIndex(-1);
+        }
+    }
+
+    void TerminalPage::_WorkspaceClosePreviewClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _CloseWorkspacePreview();
     }
 
     // Method Description:
@@ -5906,19 +6404,24 @@ namespace winrt::TerminalApp::implementation
 
         _workspaceFlyout.Items().Clear();
 
-        // --- "Name / Rename this window" ---
+        // Live workspaces keep their terminal processes running while hidden.
+        // A folder workspace shows its path to disambiguate equal folder names.
+        for (const auto& workspace : _workspaces)
         {
             MenuFlyoutItem item{};
-            item.Text(_WindowProperties.WindowName().empty() ? RS_(L"NameThisWindowMenuItem") : RS_(L"RenameThisWindowMenuItem"));
-
-            auto iconElement = UI::IconPathConverter::IconWUX(L"\uE8AC"); // Rename glyph
-            Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-            item.Icon(iconElement);
-
-            item.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-                if (auto page{ weakThis.get() })
+            item.Text(workspace.root.empty() ? workspace.displayName :
+                                               winrt::hstring{ fmt::format(FMT_COMPILE(L"{} — {}"), workspace.displayName, workspace.root.native()) });
+            if (workspace.id == _activeWorkspaceId)
+            {
+                auto iconElement = UI::IconPathConverter::IconWUX(L"\uE73E");
+                Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
+                item.Icon(iconElement);
+            }
+            const auto id = workspace.id;
+            item.Click([weakThis{ get_weak() }, id](auto&&, auto&&) {
+                if (const auto page = weakThis.get())
                 {
-                    page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::OpenWindowRenamer, nullptr });
+                    page->_SwitchWorkspace(id);
                 }
             });
             _workspaceFlyout.Items().Append(item);
@@ -5955,7 +6458,7 @@ namespace winrt::TerminalApp::implementation
                 const auto name = pair.Key();
 
                 // Skip workspaces that correspond to a currently-open window.
-                if (openWindowNames.contains(name))
+                if (openWindowNames.contains(name) || _FindWorkspace(name))
                 {
                     continue;
                 }
@@ -5976,7 +6479,7 @@ namespace winrt::TerminalApp::implementation
                 item.Click([weakThis{ get_weak() }, name](auto&&, auto&&) {
                     if (auto page{ weakThis.get() })
                     {
-                        page->_OpenWorkspaceWindow(name);
+                        page->_OpenWorkspace(name);
                     }
                 });
 
@@ -6034,72 +6537,45 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
-        // --- Open windows section ---
-        if (windowEntries && windowEntries.Size() > 0)
-        {
-            _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
-
-            const auto thisWindowId = _WindowProperties.WindowId();
-
-            for (const auto& entry : windowEntries)
-            {
-                const auto id = entry.Id();
-                const auto& name = entry.Name();
-
-                winrt::hstring displayText;
-                if (name.empty())
-                {
-                    displayText = winrt::hstring{ RS_fmt(L"WindowListUnnamedEntry", id) };
-                }
-                else
-                {
-                    displayText = winrt::hstring{ fmt::format(FMT_COMPILE(L"#{}: {}"), id, name) };
-                }
-
-                MenuFlyoutItem item{};
-                item.Text(displayText);
-
-                if (id == thisWindowId)
-                {
-                    auto iconElement = UI::IconPathConverter::IconWUX(L"\uE73E"); // CheckMark glyph
-                    Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                    item.Icon(iconElement);
-                    item.IsEnabled(false);
-                }
-                else
-                {
-                    auto iconElement = UI::IconPathConverter::IconWUX(L"\uE737"); // ChromeRestore glyph
-                    Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                    item.Icon(iconElement);
-
-                    item.Click([weakThis{ get_weak() }, id](auto&&, auto&&) {
-                        if (auto page{ weakThis.get() })
-                        {
-                            page->SummonWindowByIdRequested.raise(*page, winrt::make<SummonWindowByIdRequestedArgs>(id));
-                        }
-                    });
-                }
-
-                _workspaceFlyout.Items().Append(item);
-            }
-        }
-
         _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
 
-        MenuFlyoutItem newWindowItem{};
-        newWindowItem.Text(RS_(L"NewWindowMenuItem"));
+        MenuFlyoutItem newWorkspaceItem{};
+        newWorkspaceItem.Text(RS_(L"NewWorkspaceMenuItem"));
 
-        auto newWindowIcon = UI::IconPathConverter::IconWUX(L"\uE78B");
-        Automation::AutomationProperties::SetAccessibilityView(newWindowIcon, Automation::Peers::AccessibilityView::Raw);
-        newWindowItem.Icon(newWindowIcon);
+        auto newWorkspaceIcon = UI::IconPathConverter::IconWUX(L"\uE710");
+        Automation::AutomationProperties::SetAccessibilityView(newWorkspaceIcon, Automation::Peers::AccessibilityView::Raw);
+        newWorkspaceItem.Icon(newWorkspaceIcon);
 
-        newWindowItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
+        newWorkspaceItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
             if (auto page{ weakThis.get() })
             {
-                page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::NewWindow, nullptr });
+                page->_CreateNamedWorkspace();
             }
         });
-        _workspaceFlyout.Items().Append(newWindowItem);
+        _workspaceFlyout.Items().Append(newWorkspaceItem);
+
+        MenuFlyoutItem folderItem{};
+        folderItem.Text(RS_(L"OpenFolderWorkspaceMenuItem"));
+        auto folderIcon = UI::IconPathConverter::IconWUX(L"\uE8B7");
+        Automation::AutomationProperties::SetAccessibilityView(folderIcon, Automation::Peers::AccessibilityView::Raw);
+        folderItem.Icon(folderIcon);
+        folderItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
+            if (auto page{ weakThis.get() })
+            {
+                page->_PickWorkspaceFolder();
+            }
+        });
+        _workspaceFlyout.Items().Append(folderItem);
+
+        MenuFlyoutItem pathItem{};
+        pathItem.Text(RS_(L"EnterFolderPathMenuItem"));
+        pathItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
+            if (auto page{ weakThis.get() })
+            {
+                page->_EnterWorkspaceFolderPath();
+            }
+        });
+        _workspaceFlyout.Items().Append(pathItem);
     }
 
     // Handler for our WindowProperties's PropertyChanged event. We'll use this

@@ -840,6 +840,75 @@
   <data name="WorkspaceDropdown.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>工作区</value>
   </data>
+  <data name="DefaultWorkspaceName" xml:space="preserve">
+    <value>默认</value>
+  </data>
+  <data name="NewWorkspaceMenuItem" xml:space="preserve">
+    <value>新建工作区...</value>
+  </data>
+  <data name="OpenFolderWorkspaceMenuItem" xml:space="preserve">
+    <value>将文件夹作为工作区打开...</value>
+  </data>
+  <data name="EnterFolderPathMenuItem" xml:space="preserve">
+    <value>输入文件夹路径...</value>
+  </data>
+  <data name="EnterFolderPathTitle" xml:space="preserve">
+    <value>打开文件夹工作区</value>
+  </data>
+  <data name="OpenFolderButton" xml:space="preserve">
+    <value>打开</value>
+  </data>
+  <data name="FolderPathPlaceholder" xml:space="preserve">
+    <value>文件夹的绝对路径</value>
+  </data>
+  <data name="InvalidFolderPathTitle" xml:space="preserve">
+    <value>找不到文件夹</value>
+  </data>
+  <data name="InvalidFolderPathMessage" xml:space="preserve">
+    <value>请输入存在的文件夹绝对路径。</value>
+  </data>
+  <data name="NewWorkspaceTitle" xml:space="preserve">
+    <value>新建工作区</value>
+  </data>
+  <data name="CreateWorkspaceButton" xml:space="preserve">
+    <value>创建</value>
+  </data>
+  <data name="CancelWorkspaceButton" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="WorkspaceNamePlaceholder" xml:space="preserve">
+    <value>工作区名称</value>
+  </data>
+  <data name="WorkspaceFolderReadError" xml:space="preserve">
+    <value>无法读取此文件夹。</value>
+  </data>
+  <data name="WorkspaceFileReadError" xml:space="preserve">
+    <value>无法读取此文件。</value>
+  </data>
+  <data name="WorkspaceBinaryFileMessage" xml:space="preserve">
+    <value>无法预览二进制文件。</value>
+  </data>
+  <data name="WorkspaceUnsupportedEncodingMessage" xml:space="preserve">
+    <value>无法预览此文本编码。</value>
+  </data>
+  <data name="WorkspacePreviewTruncatedMessage" xml:space="preserve">
+    <value>仅预览前 128 KB。</value>
+  </data>
+  <data name="WorkspaceFilesHeader.Text" xml:space="preserve">
+    <value>文件</value>
+  </data>
+  <data name="WorkspaceChangeFolderButton.Content" xml:space="preserve">
+    <value>打开文件夹</value>
+  </data>
+  <data name="WorkspaceUpButton.Content" xml:space="preserve">
+    <value>上一级</value>
+  </data>
+  <data name="WorkspaceRefreshButton.Content" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="WorkspaceClosePreviewButton.Content" xml:space="preserve">
+    <value>关闭</value>
+  </data>
   <data name="CommandPalette_MatchesAvailable" xml:space="preserve">
     <value>找到的建议: {0}</value>
     <comment>{0} will be replaced with a number.</comment>

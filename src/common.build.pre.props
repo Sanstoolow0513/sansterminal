@@ -175,10 +175,15 @@
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- Work around the Windows Store platform not specifying a TargetMachine for static libraries -->
+  <!-- The Windows Store platform does not reliably set TargetMachine for static libraries. -->
   <ItemDefinitionGroup Condition="'$(Platform)'=='Win32'">
     <Lib>
       <TargetMachine>MachineX86</TargetMachine>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <Lib>
+      <TargetMachine>MachineX64</TargetMachine>
     </Lib>
   </ItemDefinitionGroup>
 

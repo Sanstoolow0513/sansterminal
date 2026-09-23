@@ -895,16 +895,6 @@ namespace winrt::TerminalApp::implementation
         RequestNewWindow.raise(*this, request);
     }
 
-    // Ask the WindowEmperor (in-process) to open or summon a named window,
-    // restoring its persisted workspace if one exists. The event bubbles up
-    // through TerminalWindow to AppHost, which calls into the WindowEmperor
-    // directly. No second wt.exe process is launched.
-    void TerminalPage::_OpenWorkspaceWindow(const winrt::hstring name)
-    {
-        const auto args = winrt::make<implementation::OpenWindowRequestedArgs>(name);
-        RequestOpenWindow.raise(*this, args);
-    }
-
     void TerminalPage::_HandleNewWindow(const IInspectable& /*sender*/,
                                         const ActionEventArgs& actionArgs)
     {
@@ -1608,9 +1598,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleOpenWorkspace(const IInspectable& /*sender*/,
                                             const ActionEventArgs& args)
     {
-        // Open (or summon) a named window.  We launch a new `wt -w <name>`
-        // process which the monarch will route to the correct live window or
-        // restore from a persisted workspace.
+        // Switch to a live workspace or restore its saved tabs in this window.
         if (args)
         {
             if (const auto& realArgs = args.ActionArgs().try_as<OpenWorkspaceArgs>())
@@ -1618,7 +1606,7 @@ namespace winrt::TerminalApp::implementation
                 const auto name = realArgs.Name();
                 if (!name.empty())
                 {
-                    _OpenWorkspaceWindow(name);
+                    _OpenWorkspace(name);
                 }
                 args.Handled(true);
             }

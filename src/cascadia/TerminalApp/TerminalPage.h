@@ -20,6 +20,8 @@
 
 #include "WindowsPackageManagerFactory.h"
 
+#include <filesystem>
+
 #define DECLARE_ACTION_HANDLER(action) void _Handle##action(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::ActionEventArgs& args);
 
 namespace TerminalAppLocalTests
@@ -283,6 +285,42 @@ namespace winrt::TerminalApp::implementation
         Microsoft::UI::Xaml::Controls::SplitButton _newTabButton{ nullptr };
         Windows::UI::Xaml::Controls::MenuFlyout _workspaceFlyout{ nullptr };
         Windows::UI::Xaml::Controls::Button _workspaceDropdown{ nullptr };
+        struct WorkspaceSession
+        {
+            winrt::hstring id;
+            winrt::hstring displayName;
+            std::filesystem::path root;
+            std::filesystem::path currentDirectory;
+            winrt::TerminalApp::Tab lastFocused{ nullptr };
+        };
+        struct WorkspaceFileEntry
+        {
+            std::filesystem::path path;
+            bool isDirectory;
+        };
+        std::vector<WorkspaceSession> _workspaces;
+        std::vector<std::pair<winrt::TerminalApp::Tab, winrt::hstring>> _tabWorkspaces;
+        std::vector<WorkspaceFileEntry> _workspaceFileEntries;
+        winrt::hstring _activeWorkspaceId;
+        bool _changingWorkspace{ false };
+        WorkspaceSession* _FindWorkspace(const winrt::hstring& id);
+        winrt::hstring _WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const;
+        bool _IsTabInActiveWorkspace(const winrt::TerminalApp::Tab& tab) const;
+        void _SwitchWorkspace(const winrt::hstring& id, bool createTabIfEmpty = true);
+        void _OpenWorkspace(const winrt::hstring& id);
+        safe_void_coroutine _CreateNamedWorkspace();
+        safe_void_coroutine _PickWorkspaceFolder();
+        safe_void_coroutine _EnterWorkspaceFolderPath();
+        void _UpdateWorkspaceTabVisibility();
+        void _UpdateWorkspaceFilesUI();
+        void _RefreshWorkspaceFiles();
+        void _CloseWorkspacePreview();
+        void _PreviewWorkspaceFile(const std::filesystem::path& path);
+        void _WorkspaceChangeFolderClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceUpClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceRefreshClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceFileSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
+        void _WorkspaceClosePreviewClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         winrt::TerminalApp::ColorPickupFlyout _tabColorPicker{ nullptr };
 
         Microsoft::Terminal::Settings::Model::CascadiaSettings _settings{ nullptr };
@@ -386,7 +424,6 @@ namespace winrt::TerminalApp::implementation
         void _restartPaneConnection(const TerminalApp::TerminalPaneContent&, const winrt::Windows::Foundation::IInspectable&);
 
         void _OpenNewWindow(const Microsoft::Terminal::Settings::Model::INewContentArgs& contentArgs);
-        void _OpenWorkspaceWindow(const winrt::hstring name);
 
         void _OpenNewTerminalViaDropdown(const Microsoft::Terminal::Settings::Model::NewTerminalArgs newTerminalArgs);
 
