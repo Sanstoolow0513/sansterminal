@@ -837,8 +837,47 @@
   <data name="ElevationShield.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>This Terminal window is running as administrator</value>
   </data>
+  <data name="WorkspaceHomeButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
+  <data name="WorkspaceHomeButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
   <data name="WorkspaceDropdown.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>Workspaces</value>
+  </data>
+  <data name="UntitledWorkspaceName" xml:space="preserve">
+    <value>Untitled workspace</value>
+  </data>
+  <data name="WorkspaceHubTitle.Text" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
+  <data name="WorkspaceHubDescription.Text" xml:space="preserve">
+    <value>Open a workspace to browse files and start terminals. Your open terminals keep running while you visit this page.</value>
+  </data>
+  <data name="WorkspaceHubNewButton.Content" xml:space="preserve">
+    <value>New workspace</value>
+  </data>
+  <data name="WorkspaceHubFolderButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="WorkspaceHubPathButton.Content" xml:space="preserve">
+    <value>Enter folder path</value>
+  </data>
+  <data name="WorkspaceHubListHeader.Text" xml:space="preserve">
+    <value>Available workspaces</value>
+  </data>
+  <data name="WorkspaceHubEmptyText.Text" xml:space="preserve">
+    <value>No workspaces yet. Create one or open a folder to begin.</value>
+  </data>
+  <data name="WorkspaceHubBackButton.Content" xml:space="preserve">
+    <value>Back to current workspace</value>
+  </data>
+  <data name="WorkspaceHubRunningStatus" xml:space="preserve">
+    <value>Terminal session</value>
+  </data>
+  <data name="WorkspaceHubSavedStatus" xml:space="preserve">
+    <value>Saved workspace</value>
   </data>
   <data name="DefaultWorkspaceName" xml:space="preserve">
     <value>Default</value>

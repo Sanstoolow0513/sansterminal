@@ -837,8 +837,44 @@
   <data name="ElevationShield.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>此终端窗口正在以管理员身份运行</value>
   </data>
-  <data name="WorkspaceDropdown.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+  <data name="WorkspaceHomeButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>工作区</value>
+  </data>
+  <data name="WorkspaceHomeButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>工作区</value>
+  </data>
+  <data name="UntitledWorkspaceName" xml:space="preserve">
+    <value>未命名工作区</value>
+  </data>
+  <data name="WorkspaceHubTitle.Text" xml:space="preserve">
+    <value>工作区</value>
+  </data>
+  <data name="WorkspaceHubDescription.Text" xml:space="preserve">
+    <value>打开工作区后即可浏览文件并启动终端。进入此页面时，已有终端仍会继续运行。</value>
+  </data>
+  <data name="WorkspaceHubNewButton.Content" xml:space="preserve">
+    <value>新建工作区</value>
+  </data>
+  <data name="WorkspaceHubFolderButton.Content" xml:space="preserve">
+    <value>打开文件夹</value>
+  </data>
+  <data name="WorkspaceHubPathButton.Content" xml:space="preserve">
+    <value>输入文件夹路径</value>
+  </data>
+  <data name="WorkspaceHubListHeader.Text" xml:space="preserve">
+    <value>可用工作区</value>
+  </data>
+  <data name="WorkspaceHubEmptyText.Text" xml:space="preserve">
+    <value>还没有工作区。新建工作区或打开文件夹即可开始。</value>
+  </data>
+  <data name="WorkspaceHubBackButton.Content" xml:space="preserve">
+    <value>返回当前工作区</value>
+  </data>
+  <data name="WorkspaceHubRunningStatus" xml:space="preserve">
+    <value>终端会话</value>
+  </data>
+  <data name="WorkspaceHubSavedStatus" xml:space="preserve">
+    <value>已保存的工作区</value>
   </data>
   <data name="DefaultWorkspaceName" xml:space="preserve">
     <value>默认</value>

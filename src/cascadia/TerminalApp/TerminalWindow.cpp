@@ -172,7 +172,7 @@ namespace winrt::TerminalApp::implementation
             // .TabLayout(). We can re-evaluate that as a part of TODO: GH#12633
             _root->SetStartupActions(wil::to_vector(layout.TabLayout()));
         }
-        else if (_appArgs)
+        else if (_appArgs && _hasCommandLineArguments)
         {
             _root->SetStartupActions(_appArgs->ParsedArgs().GetStartupActions());
         }
@@ -199,9 +199,21 @@ namespace winrt::TerminalApp::implementation
         //
         // Obviously, don't use the `startupActions` from the settings in the
         // case of a tear-out / reattach. GH#16050
+        const auto explicitlyOpensWorkspace = std::any_of(_settingsStartupArgs.begin(), _settingsStartupArgs.end(), [](const auto& action) {
+            if (action.Action() == ShortcutAction::OpenWorkspace)
+            {
+                if (const auto args = action.Args().try_as<OpenWorkspaceArgs>())
+                {
+                    return !args.Name().empty();
+                }
+            }
+            return false;
+        });
         if (!_hasCommandLineArguments &&
             _initialContentArgs.empty() &&
-            _gotSettingsStartupActions)
+            !LoadPersistedLayout() &&
+            _gotSettingsStartupActions &&
+            (!_WindowProperties->WindowName().empty() || explicitlyOpensWorkspace))
         {
             _root->SetStartupActions(_settingsStartupArgs);
         }

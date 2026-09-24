@@ -47,7 +47,7 @@ namespace winrt::TerminalApp::implementation
 
         // The sidebar header is a two-row toolbar above the session list:
         //   row 0: [page-owned sidebar toggle] ... [new tab]
-        //   row 1: [window switcher, full width]
+        //   row 1: [workspace navigation, full width]
         // TerminalPage floats the sidebar toggle over the leading edge of
         // row 0 (SideTabDock), so that space stays empty here.
         IsVertical(true);
@@ -76,20 +76,19 @@ namespace winrt::TerminalApp::implementation
         NewTabButton().Margin(WUX::ThicknessHelper::FromLengths(0, 0, 0, 0));
         FooterChrome().Visibility(WUX::Visibility::Collapsed);
 
-        const auto dropdown = WorkspaceDropdown();
-        WUX::Controls::Grid::SetRow(dropdown, 1);
-        WUX::Controls::Grid::SetColumn(dropdown, 0);
-        WUX::Controls::Grid::SetColumnSpan(dropdown, 3);
-        dropdown.HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
-        dropdown.HorizontalContentAlignment(WUX::HorizontalAlignment::Stretch);
-        dropdown.VerticalAlignment(WUX::VerticalAlignment::Center);
-        dropdown.Height(40);
-        dropdown.Margin(WUX::ThicknessHelper::FromLengths(8, 0, 8, 4));
-        dropdown.Padding(WUX::ThicknessHelper::FromLengths(12, 0, 10, 0));
-        dropdown.CornerRadius(WUX::CornerRadius{ 8, 8, 8, 8 });
-        WorkspaceDropdownIcon().FontSize(14);
+        const auto workspaceButton = WorkspaceHomeButton();
+        WUX::Controls::Grid::SetRow(workspaceButton, 1);
+        WUX::Controls::Grid::SetColumn(workspaceButton, 0);
+        WUX::Controls::Grid::SetColumnSpan(workspaceButton, 3);
+        workspaceButton.HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
+        workspaceButton.HorizontalContentAlignment(WUX::HorizontalAlignment::Stretch);
+        workspaceButton.VerticalAlignment(WUX::VerticalAlignment::Center);
+        workspaceButton.Height(40);
+        workspaceButton.Margin(WUX::ThicknessHelper::FromLengths(8, 0, 8, 4));
+        workspaceButton.Padding(WUX::ThicknessHelper::FromLengths(12, 0, 10, 0));
+        workspaceButton.CornerRadius(WUX::CornerRadius{ 8, 8, 8, 8 });
+        WorkspaceHomeIcon().FontSize(14);
         SidebarWorkspaceLabelText().FontSize(13);
-        WorkspaceFlyout().Placement(WUX::Controls::Primitives::FlyoutPlacementMode::BottomEdgeAlignedLeft);
     }
 
     winrt::Windows::UI::Xaml::Visibility TabRowControl::SidebarVisibility(bool isVertical)
@@ -146,10 +145,6 @@ namespace winrt::TerminalApp::implementation
         if (WI_IsFlagSet(modifiers, static_cast<uint32_t>(DragDrop::DragDropModifiers::Alt)))
         {
             e.DragUIOverride().Caption(RS_(L"DropPathTabSplit/Text"));
-        }
-        else if (WI_IsFlagSet(modifiers, static_cast<uint32_t>(DragDrop::DragDropModifiers::Shift)))
-        {
-            e.DragUIOverride().Caption(RS_(L"DropPathTabNewWindow/Text"));
         }
         else
         {

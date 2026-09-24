@@ -186,6 +186,56 @@
             </Thumb>
         </Grid>
 
+        <!-- The workspace page is the welcome screen and the navigation surface. -->
+        <Grid x:Name="WorkspaceHub"
+              Grid.Row="2"
+              Canvas.ZIndex="3"
+              Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+              Visibility="Collapsed">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel MaxWidth="760"
+                            Margin="36,48,36,36"
+                            HorizontalAlignment="Center">
+                    <TextBlock x:Uid="WorkspaceHubTitle"
+                               FontSize="30"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Uid="WorkspaceHubDescription"
+                               Margin="0,10,0,28"
+                               TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="WorkspaceHubNewButton"
+                                x:Uid="WorkspaceHubNewButton"
+                                Click="_WorkspaceHubNewClick" />
+                        <Button x:Name="WorkspaceHubFolderButton"
+                                x:Uid="WorkspaceHubFolderButton"
+                                Margin="10,0,0,0"
+                                Click="_WorkspaceHubFolderClick" />
+                        <Button x:Name="WorkspaceHubPathButton"
+                                x:Uid="WorkspaceHubPathButton"
+                                Margin="10,0,0,0"
+                                Click="_WorkspaceHubPathClick" />
+                    </StackPanel>
+                    <TextBlock x:Uid="WorkspaceHubListHeader"
+                               Margin="0,36,0,12"
+                               FontSize="18"
+                               FontWeight="SemiBold" />
+                    <ListView x:Name="WorkspaceHubList"
+                              MinWidth="480"
+                              MaxHeight="360"
+                              SelectionMode="Single"
+                              SelectionChanged="_WorkspaceHubSelectionChanged" />
+                    <TextBlock x:Name="WorkspaceHubEmptyText"
+                               x:Uid="WorkspaceHubEmptyText"
+                               Margin="0,12,0,0"
+                               Visibility="Collapsed" />
+                    <Button x:Name="WorkspaceHubBackButton"
+                            x:Uid="WorkspaceHubBackButton"
+                            Margin="0,24,0,0"
+                            Click="_WorkspaceHubBackClick" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
         <!--
             The compact toggle remains available above the sidebar, even when
             its layout column is collapsed. While the sidebar is open it sits
@@ -324,6 +374,7 @@
 
         <local:CommandPalette x:Name="CommandPaletteElement"
                               Grid.Row="2"
+                              Canvas.ZIndex="4"
                               VerticalAlignment="Stretch"
                               x:Load="False"
                               PreviewKeyDown="_KeyDownHandler"
@@ -331,6 +382,7 @@
 
         <local:SuggestionsControl x:Name="SuggestionsElement"
                                   Grid.Row="2"
+                                  Canvas.ZIndex="4"
                                   HorizontalAlignment="Left"
                                   VerticalAlignment="Top"
                                   x:Load="False"

@@ -66,13 +66,9 @@
                           Glyph="&#xEA18;"
                           Visibility="{x:Bind ShowElevationShield, Mode=OneWay}" />
 
-                <!--
-                    Window switcher. Horizontal tabs keep it at the leading edge
-                    of the strip. Side tabs give it a full-width row of its own
-                    above the session list.
-                -->
-                <Button x:Name="WorkspaceDropdown"
-                        x:Uid="WorkspaceDropdown"
+                <!-- The workspace button opens the full workspace page. -->
+                <Button x:Name="WorkspaceHomeButton"
+                        x:Uid="WorkspaceHomeButton"
                         Grid.Column="1"
                         Margin="4,0,0,4"
                         Padding="8,0,0,0"
@@ -89,12 +85,12 @@
                                                   MinWidth="0" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <!--  EE40 is the "TaskViewSettings" glyph  -->
-                            <FontIcon x:Name="WorkspaceDropdownIcon"
+                            <!--  E80F is the Home glyph. -->
+                            <FontIcon x:Name="WorkspaceHomeIcon"
                                       VerticalAlignment="Center"
                                       FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                       FontSize="12"
-                                      Glyph="&#xEE40;" />
+                                      Glyph="&#xE80F;" />
                             <TextBlock x:Name="WorkspaceNameText"
                                        Grid.Column="1"
                                        Margin="8,0,8,0"
@@ -111,18 +107,8 @@
                                        TextTrimming="CharacterEllipsis"
                                        TextWrapping="NoWrap"
                                        Visibility="{x:Bind SidebarVisibility(IsVertical), Mode=OneWay}" />
-                            <!--  E70D is ChevronDown; the sidebar menu opens downward.  -->
-                            <FontIcon Grid.Column="3"
-                                      VerticalAlignment="Center"
-                                      FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                      FontSize="12"
-                                      Glyph="&#xE70D;"
-                                      Visibility="{x:Bind SidebarVisibility(IsVertical), Mode=OneWay}" />
                         </Grid>
                     </Button.Content>
-                    <Button.Flyout>
-                        <MenuFlyout x:Name="WorkspaceFlyout" />
-                    </Button.Flyout>
                 </Button>
             </Grid>
         </mux:TabView.TabStripHeader>
@@ -157,8 +143,6 @@
                             <TextBlock TextWrapping="Wrap">
                                 <Run x:Uid="NewTabRun" /> <LineBreak />
                                 <Run x:Uid="NewPaneRun"
-                                     FontStyle="Italic" /> <LineBreak />
-                                <Run x:Uid="NewWindowRun"
                                      FontStyle="Italic" />
                             </TextBlock>
                         </ToolTip>

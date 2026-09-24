@@ -1540,28 +1540,6 @@ namespace winrt::TerminalApp::implementation
     {
         auto weakThis{ get_weak() };
 
-        // Move to new window
-        {
-            Controls::FontIcon moveTabToNewWindowTabSymbol;
-            moveTabToNewWindowTabSymbol.FontFamily(Media::FontFamily{ L"Segoe Fluent Icons, Segoe MDL2 Assets" });
-            moveTabToNewWindowTabSymbol.Glyph(L"\xE8A7");
-
-            _moveToNewWindowMenuItem.Click([weakThis](auto&&, auto&&) {
-                if (auto tab{ weakThis.get() })
-                {
-                    MoveTabArgs args{ L"new", MoveTabDirection::Forward };
-                    ActionAndArgs actionAndArgs{ ShortcutAction::MoveTab, args };
-                    tab->_dispatch.DoAction(*tab, actionAndArgs);
-                }
-            });
-            _moveToNewWindowMenuItem.Text(RS_(L"MoveTabToNewWindowText"));
-            _moveToNewWindowMenuItem.Icon(moveTabToNewWindowTabSymbol);
-
-            const auto moveTabToNewWindowToolTip = RS_(L"MoveTabToNewWindowToolTip");
-            WUX::Controls::ToolTipService::SetToolTip(_moveToNewWindowMenuItem, box_value(moveTabToNewWindowToolTip));
-            Automation::AutomationProperties::SetHelpText(_moveToNewWindowMenuItem, moveTabToNewWindowToolTip);
-        }
-
         // Move left
         {
             _moveLeftMenuItem.Click([weakThis](auto&&, auto&&) {
@@ -1591,7 +1569,6 @@ namespace winrt::TerminalApp::implementation
         // Create a sub-menu for our extended move tab items.
         Controls::MenuFlyoutSubItem moveSubMenu;
         moveSubMenu.Text(RS_(L"TabMoveSubMenu"));
-        moveSubMenu.Items().Append(_moveToNewWindowMenuItem);
         moveSubMenu.Items().Append(_moveRightMenuItem);
         moveSubMenu.Items().Append(_moveLeftMenuItem);
         flyout.Items().Append(moveSubMenu);

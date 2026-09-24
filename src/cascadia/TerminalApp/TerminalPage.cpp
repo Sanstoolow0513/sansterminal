@@ -352,35 +352,16 @@ namespace winrt::TerminalApp::implementation
         const auto canDragDrop = CanDragDrop();
 
         _tabView.CanReorderTabs(canDragDrop);
-        _tabView.CanDragTabs(canDragDrop);
+        // Reordering stays available within a workspace. Dragging a tab out
+        // would create a physical window, so the workspace UI disables it.
+        _tabView.CanDragTabs(false);
         _tabView.TabDragStarting({ get_weak(), &TerminalPage::_TabDragStarted });
         _tabView.TabDragCompleted({ get_weak(), &TerminalPage::_TabDragCompleted });
 
         auto tabRowImpl = winrt::get_self<implementation::TabRowControl>(_tabRow);
         _newTabButton = tabRowImpl->NewTabButton();
-        _workspaceFlyout = tabRowImpl->WorkspaceFlyout();
-        _workspaceDropdown = tabRowImpl->WorkspaceDropdown();
-
-        // A restored window starts with one workspace. Further workspaces keep
-        // their tabs alive in this same TabView and hide them while inactive.
-        const auto initialName = _WindowProperties.WindowName();
-        _activeWorkspaceId = initialName.empty() ? L"__default_workspace__" : initialName;
-        _workspaces.push_back({ _activeWorkspaceId,
-                                initialName.empty() ? RS_(L"DefaultWorkspaceName") : initialName,
-                                {}, {}, nullptr });
-
-        // Horizontal tabs show the raw window name (blank when unnamed).
-        // The sidebar footer always has a caption, including "#id (unnamed)".
-        _UpdateWorkspaceLabels();
-
-        // Rebuild the workspace flyout each time it opens so it always
-        // reflects the latest set of persisted workspaces.
-        _workspaceFlyout.Opening([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_PopulateWorkspaceFlyout();
-            }
-        });
+        _workspaceHomeButton = tabRowImpl->WorkspaceHomeButton();
+        _workspaceHomeButton.Click({ this, &TerminalPage::_WorkspaceHomeClick });
 
         _tabPosition = _currentWindowSettings().TabPosition();
 
@@ -539,6 +520,18 @@ namespace winrt::TerminalApp::implementation
         if (const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings()))
         {
             _tabRow.ShowWorkspacesButton(theme.Window() ? theme.Window().ShowWorkspacesButton() : true);
+        }
+
+        // The host can still supply a legacy named layout. Otherwise wait on
+        // the welcome page until a workspace is chosen or restored.
+        if (const auto initialName = _WindowProperties.WindowName(); !initialName.empty())
+        {
+            _SwitchWorkspace(initialName, false);
+        }
+        else
+        {
+            _UpdateWorkspaceLabels();
+            _ShowWorkspaceHub();
         }
 
     }
@@ -920,7 +913,7 @@ namespace winrt::TerminalApp::implementation
         // GH#12267: Make sure that we don't instantly close ourselves when
         // we're readying to accept a defterm connection. In that case, we don't
         // have a tab yet, but will once we're initialized.
-        if (_tabs.Size() == 0)
+        if (_tabs.Size() == 0 && _hasStartupActions)
         {
             CloseWindowRequested.raise(*this, nullptr);
             co_return;
@@ -1408,9 +1401,6 @@ namespace winrt::TerminalApp::implementation
         auto newPaneRun = WUX::Documents::Run();
         newPaneRun.Text(RS_(L"NewPaneRun/Text"));
         newPaneRun.FontStyle(FontStyle::Italic);
-        auto newWindowRun = WUX::Documents::Run();
-        newWindowRun.Text(RS_(L"NewWindowRun/Text"));
-        newWindowRun.FontStyle(FontStyle::Italic);
         auto elevatedRun = WUX::Documents::Run();
         elevatedRun.Text(RS_(L"ElevatedRun/Text"));
         elevatedRun.FontStyle(FontStyle::Italic);
@@ -1419,8 +1409,6 @@ namespace winrt::TerminalApp::implementation
         textBlock.Inlines().Append(newTabRun);
         textBlock.Inlines().Append(WUX::Documents::LineBreak{});
         textBlock.Inlines().Append(newPaneRun);
-        textBlock.Inlines().Append(WUX::Documents::LineBreak{});
-        textBlock.Inlines().Append(newWindowRun);
         textBlock.Inlines().Append(WUX::Documents::LineBreak{});
         textBlock.Inlines().Append(elevatedRun);
 
@@ -1528,19 +1516,20 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_OpenNewTerminalViaDropdown(const NewTerminalArgs newTerminalArgs)
     {
+        _EnsureWorkspaceForTerminal();
+        if (newTerminalArgs.StartingDirectory().empty())
+        {
+            if (const auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+            {
+                newTerminalArgs.StartingDirectory(winrt::hstring{ workspace->root.native() });
+            }
+        }
         // if alt is pressed, open a pane
         const auto window = CoreWindow::GetForCurrentThread();
         const auto rAltState = window.GetKeyState(VirtualKey::RightMenu);
         const auto lAltState = window.GetKeyState(VirtualKey::LeftMenu);
         const auto altPressed = WI_IsFlagSet(lAltState, CoreVirtualKeyStates::Down) ||
                                 WI_IsFlagSet(rAltState, CoreVirtualKeyStates::Down);
-
-        const auto shiftState{ window.GetKeyState(VirtualKey::Shift) };
-        const auto rShiftState = window.GetKeyState(VirtualKey::RightShift);
-        const auto lShiftState = window.GetKeyState(VirtualKey::LeftShift);
-        const auto shiftPressed{ WI_IsFlagSet(shiftState, CoreVirtualKeyStates::Down) ||
-                                 WI_IsFlagSet(lShiftState, CoreVirtualKeyStates::Down) ||
-                                 WI_IsFlagSet(rShiftState, CoreVirtualKeyStates::Down) };
 
         const auto ctrlState{ window.GetKeyState(VirtualKey::Control) };
         const auto rCtrlState = window.GetKeyState(VirtualKey::RightControl);
@@ -1557,7 +1546,7 @@ namespace winrt::TerminalApp::implementation
         const auto dispatchToElevatedWindow = ctrlPressed && !IsRunningElevated();
 
         auto sessionType = "";
-        if ((shiftPressed || dispatchToElevatedWindow) && !debugTap)
+        if (dispatchToElevatedWindow && !debugTap)
         {
             // Manually fill in the evaluated profile.
             if (newTerminalArgs.ProfileIndex() != nullptr)
@@ -1571,16 +1560,8 @@ namespace winrt::TerminalApp::implementation
                 }
             }
 
-            if (dispatchToElevatedWindow)
-            {
-                _OpenElevatedWT(newTerminalArgs);
-                sessionType = "ElevatedWindow";
-            }
-            else
-            {
-                _OpenNewWindow(newTerminalArgs);
-                sessionType = "Window";
-            }
+            _OpenElevatedWT(newTerminalArgs);
+            sessionType = "ElevatedWindow";
         }
         else
         {
@@ -1592,7 +1573,7 @@ namespace winrt::TerminalApp::implementation
             {
                 return;
             }
-            if (altPressed && !debugTap)
+            if (altPressed && !debugTap && _GetFocusedTabImpl())
             {
                 this->_SplitPane(_GetFocusedTabImpl(),
                                  SplitDirection::Automatic,
@@ -2409,8 +2390,9 @@ namespace winrt::TerminalApp::implementation
 
         std::vector<ActionAndArgs> actions;
 
-        const bool persistWorkspaceGroups = _workspaces.size() > 1 ||
-                                            (!_workspaces.empty() && !_workspaces.front().root.empty());
+        // Every terminal belongs to a workspace, including an untitled one.
+        // Always write a marker so a single named workspace keeps its identity.
+        const bool persistWorkspaceGroups = true;
         winrt::hstring previousWorkspace;
         bool firstTab = true;
         bool hasTabActions = false;
@@ -4301,6 +4283,7 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void TerminalPage::SetStartupActions(std::vector<ActionAndArgs> actions)
     {
+        _hasStartupActions = !actions.empty();
         _startupActions = std::move(actions);
     }
 
@@ -5833,6 +5816,16 @@ namespace winrt::TerminalApp::implementation
         return _WorkspaceForTab(tab) == _activeWorkspaceId;
     }
 
+    void TerminalPage::_EnsureWorkspaceForTerminal()
+    {
+        // Explicit terminal commands can arrive before the user opens a
+        // workspace. Give those sessions a real, restorable home.
+        if (_activeWorkspaceId.empty())
+        {
+            _SwitchWorkspace(L"__untitled_workspace__", false);
+        }
+    }
+
     void TerminalPage::_UpdateWorkspaceTabVisibility()
     {
         const auto wasChanging = _changingWorkspace;
@@ -5893,13 +5886,15 @@ namespace winrt::TerminalApp::implementation
             {
                 root = candidate.lexically_normal();
             }
-            const auto displayName = root.empty() ? id :
-                                     winrt::hstring{ root.filename().empty() ? root.native() : root.filename().native() };
+            const auto displayName = id == L"__untitled_workspace__" ? RS_(L"UntitledWorkspaceName") :
+                                     root.empty() ? id :
+                                                    winrt::hstring{ root.filename().empty() ? root.native() : root.filename().native() };
             _workspaces.push_back({ id, displayName, root, root, nullptr });
             workspace = &_workspaces.back();
         }
 
         _activeWorkspaceId = id;
+        _ShowWorkspaceContent();
         _UpdateWorkspaceTabVisibility();
         _UpdateWorkspaceLabels();
         _UpdateWorkspaceFilesUI();
@@ -5943,11 +5938,17 @@ namespace winrt::TerminalApp::implementation
         // Their terminal tabs are recreated here, while existing tabs stay live.
         if (const auto layout = ApplicationState::SharedInstance().TakeWorkspace(id))
         {
-            _SwitchWorkspace(id, false);
             std::vector<ActionAndArgs> actions;
             const auto tabIndexOffset = _tabs.Size();
             if (const auto tabLayout = layout.TabLayout())
             {
+                // Older layouts have no workspace markers. Those tabs need
+                // the saved name as their initial owner. Marker based layouts
+                // choose the correct workspace before creating each tab.
+                if (tabLayout.Size() < 2 || tabLayout.GetAt(0).Action() != ShortcutAction::OpenWorkspace)
+                {
+                    _SwitchWorkspace(id, false);
+                }
                 for (const auto& action : tabLayout)
                 {
                     // Keep the current physical window name and translate the
@@ -6000,7 +6001,7 @@ namespace winrt::TerminalApp::implementation
                 if (const auto page = weakThis.get())
                 {
                     const auto name = nameBox.Text();
-                    if (!name.empty() && name != L"__default_workspace__")
+                    if (!name.empty() && name != L"__untitled_workspace__")
                     {
                         page->_SwitchWorkspace(name);
                     }
@@ -6073,6 +6074,11 @@ namespace winrt::TerminalApp::implementation
         {
             _tabRow.WorkspaceName(workspace->displayName);
             _tabRow.SidebarWorkspaceLabel(workspace->displayName);
+        }
+        else
+        {
+            _tabRow.WorkspaceName(L"");
+            _tabRow.SidebarWorkspaceLabel(L"");
         }
     }
 
@@ -6393,189 +6399,132 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    // Rebuild the workspace flyout contents. Called every time the flyout opens
-    // so it reflects the current set of persisted workspaces.
-    void TerminalPage::_PopulateWorkspaceFlyout()
+    void TerminalPage::_ShowWorkspaceHub()
     {
-        if (!_workspaceFlyout)
+        _RefreshWorkspaceHub();
+        WorkspaceHub().Visibility(Visibility::Visible);
+        SideTabLayout().Visibility(Visibility::Collapsed);
+        SideTabDock().Visibility(Visibility::Collapsed);
+        WorkspaceHubNewButton().Focus(FocusState::Programmatic);
+    }
+
+    void TerminalPage::_ShowWorkspaceContent()
+    {
+        if (_activeWorkspaceId.empty())
+        {
+            _ShowWorkspaceHub();
+            return;
+        }
+        WorkspaceHub().Visibility(Visibility::Collapsed);
+        SideTabLayout().Visibility(Visibility::Visible);
+        _UpdateTabView();
+    }
+
+    void TerminalPage::_RefreshWorkspaceHub()
+    {
+        WorkspaceHubList().SelectedIndex(-1);
+        WorkspaceHubList().Items().Clear();
+        _workspaceHubEntries.clear();
+
+        const auto append = [this](const winrt::hstring& id, const winrt::hstring& title, const winrt::hstring& detail, bool saved) {
+            ListViewItem item{};
+            StackPanel content{};
+            content.Margin(ThicknessHelper::FromLengths(8, 6, 8, 6));
+            TextBlock name{};
+            name.Text(title);
+            name.FontSize(16);
+            name.FontWeight(FontWeights::SemiBold());
+            content.Children().Append(name);
+            TextBlock subtitle{};
+            subtitle.Text(detail);
+            subtitle.Opacity(0.7);
+            subtitle.TextTrimming(TextTrimming::CharacterEllipsis);
+            content.Children().Append(subtitle);
+            item.Content(content);
+            WorkspaceHubList().Items().Append(item);
+            _workspaceHubEntries.push_back({ id, saved });
+        };
+
+        for (const auto& workspace : _workspaces)
+        {
+            const auto detail = workspace.root.empty() ? RS_(L"WorkspaceHubRunningStatus") :
+                                winrt::hstring{ workspace.root.native() };
+            append(workspace.id, workspace.displayName, detail, false);
+        }
+
+        if (const auto saved = ApplicationState::SharedInstance().AllPersistedWorkspaces())
+        {
+            for (const auto& entry : saved)
+            {
+                if (!_FindWorkspace(entry.Key()))
+                {
+                    append(entry.Key(), entry.Key(), RS_(L"WorkspaceHubSavedStatus"), true);
+                }
+            }
+        }
+
+        WorkspaceHubEmptyText().Visibility(_workspaceHubEntries.empty() ? Visibility::Visible : Visibility::Collapsed);
+        bool hasActiveTab = false;
+        for (const auto& tab : _tabs)
+        {
+            if (_IsTabInActiveWorkspace(tab))
+            {
+                hasActiveTab = true;
+                break;
+            }
+        }
+        WorkspaceHubBackButton().IsEnabled(hasActiveTab);
+    }
+
+    void TerminalPage::_WorkspaceHomeClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _ShowWorkspaceHub();
+    }
+
+    void TerminalPage::_WorkspaceHubBackClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _ShowWorkspaceContent();
+        if (const auto tab = _GetFocusedTabImpl())
+        {
+            if (const auto content = tab->GetActiveContent())
+            {
+                content.Focus(FocusState::Programmatic);
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceHubNewClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _CreateNamedWorkspace();
+    }
+
+    void TerminalPage::_WorkspaceHubFolderClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _PickWorkspaceFolder();
+    }
+
+    void TerminalPage::_WorkspaceHubPathClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _EnterWorkspaceFolderPath();
+    }
+
+    void TerminalPage::_WorkspaceHubSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
+    {
+        const auto index = WorkspaceHubList().SelectedIndex();
+        if (index < 0 || static_cast<size_t>(index) >= _workspaceHubEntries.size())
         {
             return;
         }
-
-        _workspaceFlyout.Items().Clear();
-
-        // Live workspaces keep their terminal processes running while hidden.
-        // A folder workspace shows its path to disambiguate equal folder names.
-        for (const auto& workspace : _workspaces)
+        const auto entry = _workspaceHubEntries[index];
+        WorkspaceHubList().SelectedIndex(-1);
+        if (entry.saved)
         {
-            MenuFlyoutItem item{};
-            item.Text(workspace.root.empty() ? workspace.displayName :
-                                               winrt::hstring{ fmt::format(FMT_COMPILE(L"{} — {}"), workspace.displayName, workspace.root.native()) });
-            if (workspace.id == _activeWorkspaceId)
-            {
-                auto iconElement = UI::IconPathConverter::IconWUX(L"\uE73E");
-                Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                item.Icon(iconElement);
-            }
-            const auto id = workspace.id;
-            item.Click([weakThis{ get_weak() }, id](auto&&, auto&&) {
-                if (const auto page = weakThis.get())
-                {
-                    page->_SwitchWorkspace(id);
-                }
-            });
-            _workspaceFlyout.Items().Append(item);
+            _OpenWorkspace(entry.id);
         }
-
-        // --- Gather open window info first so we can filter workspaces ---
-        const auto windowListReq{ winrt::make<WindowListRequest>() };
-        RequestWindowList.raise(*this, windowListReq);
-        const auto windowEntries = windowListReq.Entries();
-
-        std::set<winrt::hstring> openWindowNames;
-        if (windowEntries)
+        else
         {
-            for (const auto& entry : windowEntries)
-            {
-                const auto& name = entry.Name();
-                if (!name.empty())
-                {
-                    openWindowNames.emplace(name);
-                }
-            }
+            _SwitchWorkspace(entry.id);
         }
-
-        // --- Saved workspaces section (only those not currently open) ---
-        // Collect workspace names that aren't currently open so we can show
-        // them both as top-level "open" items and inside the delete sub-menu.
-        const auto workspaces = ApplicationState::SharedInstance().AllPersistedWorkspaces();
-        if (workspaces && workspaces.Size() > 0)
-        {
-            bool addedSeparator = false;
-
-            for (const auto& pair : workspaces)
-            {
-                const auto name = pair.Key();
-
-                // Skip workspaces that correspond to a currently-open window.
-                if (openWindowNames.contains(name) || _FindWorkspace(name))
-                {
-                    continue;
-                }
-
-                if (!addedSeparator)
-                {
-                    _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
-                    addedSeparator = true;
-                }
-
-                MenuFlyoutItem item{};
-                item.Text(name);
-
-                auto iconElement = UI::IconPathConverter::IconWUX(L"\uE8F1"); // SwitchApps glyph
-                Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                item.Icon(iconElement);
-
-                item.Click([weakThis{ get_weak() }, name](auto&&, auto&&) {
-                    if (auto page{ weakThis.get() })
-                    {
-                        page->_OpenWorkspace(name);
-                    }
-                });
-
-                // Right-click to delete: attach a context flyout with a
-                // "Delete workspace?" item that opens a confirmation dialog.
-                {
-                    WUX::Controls::MenuFlyout deleteFlyout{};
-                    deleteFlyout.Placement(WUX::Controls::Primitives::FlyoutPlacementMode::BottomEdgeAlignedRight);
-
-                    WUX::Controls::MenuFlyoutItem deleteItem{};
-                    deleteItem.Text(RS_(L"DeleteWorkspaceMenuItem"));
-
-                    auto trashIcon = UI::IconPathConverter::IconWUX(L"\xE74D"); // Delete  glyph
-
-                    deleteItem.Click([weakThis{ get_weak() }, name](auto&&, auto&&) -> safe_void_coroutine {
-                        auto page{ weakThis.get() };
-                        if (!page)
-                        {
-                            co_return;
-                        }
-
-                        // Build and show a confirmation ContentDialog.
-                        ContentDialog dialog{};
-                        dialog.Title(winrt::box_value(winrt::hstring{ RS_fmt(L"ConfirmDeleteWorkspaceTitle", name) }));
-                        dialog.Content(winrt::box_value(winrt::hstring{ RS_fmt(L"ConfirmDeleteWorkspaceBody", name) }));
-                        dialog.PrimaryButtonText(RS_(L"ConfirmDeleteWorkspaceDelete"));
-                        dialog.CloseButtonText(RS_(L"ConfirmDeleteWorkspaceCancel"));
-                        dialog.DefaultButton(ContentDialogButton::Close);
-
-                        if (auto presenter{ page->_dialogPresenter.get() })
-                        {
-                            const auto result = co_await presenter.ShowDialog(dialog);
-                            // Re-check after co_await
-                            page = weakThis.get();
-                            if (!page)
-                            {
-                                co_return;
-                            }
-                            if (result == ContentDialogResult::Primary)
-                            {
-                                ApplicationState::SharedInstance().RemoveWorkspace(name);
-                                page->_PopulateWorkspaceFlyout();
-                            }
-                        }
-                    });
-
-                    deleteFlyout.Items().Append(deleteItem);
-                    WUX::Controls::Primitives::FlyoutBase::SetAttachedFlyout(item, deleteFlyout);
-                    item.ContextRequested([item](auto&&, auto&&) {
-                        WUX::Controls::Primitives::FlyoutBase::ShowAttachedFlyout(item);
-                    });
-                }
-
-                _workspaceFlyout.Items().Append(item);
-            }
-        }
-
-        _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
-
-        MenuFlyoutItem newWorkspaceItem{};
-        newWorkspaceItem.Text(RS_(L"NewWorkspaceMenuItem"));
-
-        auto newWorkspaceIcon = UI::IconPathConverter::IconWUX(L"\uE710");
-        Automation::AutomationProperties::SetAccessibilityView(newWorkspaceIcon, Automation::Peers::AccessibilityView::Raw);
-        newWorkspaceItem.Icon(newWorkspaceIcon);
-
-        newWorkspaceItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_CreateNamedWorkspace();
-            }
-        });
-        _workspaceFlyout.Items().Append(newWorkspaceItem);
-
-        MenuFlyoutItem folderItem{};
-        folderItem.Text(RS_(L"OpenFolderWorkspaceMenuItem"));
-        auto folderIcon = UI::IconPathConverter::IconWUX(L"\uE8B7");
-        Automation::AutomationProperties::SetAccessibilityView(folderIcon, Automation::Peers::AccessibilityView::Raw);
-        folderItem.Icon(folderIcon);
-        folderItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_PickWorkspaceFolder();
-            }
-        });
-        _workspaceFlyout.Items().Append(folderItem);
-
-        MenuFlyoutItem pathItem{};
-        pathItem.Text(RS_(L"EnterFolderPathMenuItem"));
-        pathItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_EnterWorkspaceFolderPath();
-            }
-        });
-        _workspaceFlyout.Items().Append(pathItem);
     }
 
     // Handler for our WindowProperties's PropertyChanged event. We'll use this
@@ -6587,9 +6536,8 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        // Keep the workspace dropdown label in sync with the window name.
-        // Use raw WindowName() so clearing the name hides the text on the
-        // horizontal strip. The sidebar caption falls back to the window id.
+        // Window names remain supported by the host and CLI. The visible label
+        // follows the active workspace instead.
         _UpdateWorkspaceLabels();
 
         // DON'T display the confirmation if this is the name we were

@@ -1598,7 +1598,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleOpenWorkspace(const IInspectable& /*sender*/,
                                             const ActionEventArgs& args)
     {
-        // Switch to a live workspace or restore its saved tabs in this window.
+        // A named action opens a workspace; a bare action opens the workspace page.
         if (args)
         {
             if (const auto& realArgs = args.ActionArgs().try_as<OpenWorkspaceArgs>())
@@ -1608,6 +1608,10 @@ namespace winrt::TerminalApp::implementation
                 {
                     _OpenWorkspace(name);
                 }
+                else
+                {
+                    _ShowWorkspaceHub();
+                }
                 args.Handled(true);
             }
         }
@@ -1616,10 +1620,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleWorkspaces(const IInspectable& /*sender*/,
                                          const ActionEventArgs& args)
     {
-        if (_workspaceFlyout && _workspaceDropdown)
-        {
-            _workspaceFlyout.ShowAt(_workspaceDropdown);
-        }
+        _ShowWorkspaceHub();
         args.Handled(true);
     }
 

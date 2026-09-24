@@ -283,8 +283,7 @@ namespace winrt::TerminalApp::implementation
         TerminalApp::TabRowControl _tabRow{ nullptr };
         Windows::UI::Xaml::Controls::Grid _tabContent{ nullptr };
         Microsoft::UI::Xaml::Controls::SplitButton _newTabButton{ nullptr };
-        Windows::UI::Xaml::Controls::MenuFlyout _workspaceFlyout{ nullptr };
-        Windows::UI::Xaml::Controls::Button _workspaceDropdown{ nullptr };
+        Windows::UI::Xaml::Controls::Button _workspaceHomeButton{ nullptr };
         struct WorkspaceSession
         {
             winrt::hstring id;
@@ -298,19 +297,36 @@ namespace winrt::TerminalApp::implementation
             std::filesystem::path path;
             bool isDirectory;
         };
+        struct WorkspaceHubEntry
+        {
+            winrt::hstring id;
+            bool saved;
+        };
         std::vector<WorkspaceSession> _workspaces;
         std::vector<std::pair<winrt::TerminalApp::Tab, winrt::hstring>> _tabWorkspaces;
         std::vector<WorkspaceFileEntry> _workspaceFileEntries;
+        std::vector<WorkspaceHubEntry> _workspaceHubEntries;
         winrt::hstring _activeWorkspaceId;
         bool _changingWorkspace{ false };
+        bool _hasStartupActions{ false };
         WorkspaceSession* _FindWorkspace(const winrt::hstring& id);
         winrt::hstring _WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const;
         bool _IsTabInActiveWorkspace(const winrt::TerminalApp::Tab& tab) const;
+        void _EnsureWorkspaceForTerminal();
         void _SwitchWorkspace(const winrt::hstring& id, bool createTabIfEmpty = true);
         void _OpenWorkspace(const winrt::hstring& id);
         safe_void_coroutine _CreateNamedWorkspace();
         safe_void_coroutine _PickWorkspaceFolder();
         safe_void_coroutine _EnterWorkspaceFolderPath();
+        void _ShowWorkspaceHub();
+        void _ShowWorkspaceContent();
+        void _RefreshWorkspaceHub();
+        void _WorkspaceHomeClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubBackClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubNewClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubFolderClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubPathClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
         void _UpdateWorkspaceTabVisibility();
         void _UpdateWorkspaceFilesUI();
         void _RefreshWorkspaceFiles();
@@ -685,7 +701,6 @@ namespace winrt::TerminalApp::implementation
 
         void _PopulateContextMenu(const Microsoft::Terminal::Control::TermControl& control, const Microsoft::UI::Xaml::Controls::CommandBarFlyout& sender, const bool withSelection);
         void _PopulateQuickFixMenu(const Microsoft::Terminal::Control::TermControl& control, const Windows::UI::Xaml::Controls::MenuFlyout& sender);
-        void _PopulateWorkspaceFlyout();
         void _UpdateWorkspaceLabels();
         winrt::Windows::UI::Xaml::Controls::MenuFlyout _CreateRunAsAdminFlyout(int profileIndex);
 
