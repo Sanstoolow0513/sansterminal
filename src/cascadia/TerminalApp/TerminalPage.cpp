@@ -6084,11 +6084,17 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_UpdateWorkspaceFilesUI()
     {
-        _CloseWorkspacePreview();
         const auto workspace = _FindWorkspace(_activeWorkspaceId);
         const bool hasFolder = workspace && !workspace->root.empty();
+        ++_workspaceSearchVersion;
+        WorkspaceFileSearchBox().Text(L"");
+        _workspaceSearchResults.clear();
+        WorkspaceFileSearchResults().Items().Clear();
+        WorkspaceFileSearchResults().Visibility(Visibility::Collapsed);
+        WorkspaceFileTree().Visibility(Visibility::Visible);
         WorkspaceFilesPanel().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
-        WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(hasFolder ? 235.0 : 0.0, GridUnitType::Pixel));
+        WorkspaceFilesDivider().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
+        WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(hasFolder ? workspace->explorerWidth : 0.0, GridUnitType::Pixel));
         if (hasFolder)
         {
             _RefreshWorkspaceFiles();
@@ -6096,8 +6102,10 @@ namespace winrt::TerminalApp::implementation
         else
         {
             _workspaceFileEntries.clear();
-            WorkspaceFileList().Items().Clear();
+            WorkspaceFileTree().RootNodes().Clear();
+            WorkspaceFilesStatus().Text(L"");
         }
+        _RefreshWorkspaceDocumentTabs();
     }
 
     void TerminalPage::_RefreshWorkspaceFiles()
@@ -6108,16 +6116,81 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        WorkspacePathText().Text(winrt::hstring{ workspace->currentDirectory.native() });
+        WorkspacePathText().Text(winrt::hstring{ workspace->root.native() });
         _workspaceFileEntries.clear();
-        WorkspaceFileList().Items().Clear();
+        WorkspaceFileTree().RootNodes().Clear();
+        const auto root = _CreateWorkspaceFileNode(workspace->root, true);
+        WorkspaceFileTree().RootNodes().Append(root);
+        _PopulateWorkspaceFileNode(root);
+        root.IsExpanded(true);
+    }
+
+    MUX::Controls::TreeViewNode TerminalPage::_CreateWorkspaceFileNode(const std::filesystem::path& path, const bool isDirectory)
+    {
+        MUX::Controls::TreeViewNode node{};
+        StackPanel row{};
+        row.Orientation(Orientation::Horizontal);
+        FontIcon icon{};
+        icon.FontFamily(winrt::Windows::UI::Xaml::Media::FontFamily{ L"Segoe MDL2 Assets" });
+        icon.Glyph(isDirectory ? L"\xE8B7" : L"\xE8A5");
+        icon.FontSize(14);
+        row.Children().Append(icon);
+        TextBlock name{};
+        const auto label = path.filename().empty() ? path.native() : path.filename().native();
+        name.Text(winrt::hstring{ label });
+        name.Margin(ThicknessHelper::FromLengths(6, 0, 0, 0));
+        name.TextTrimming(TextTrimming::CharacterEllipsis);
+        row.Children().Append(name);
+        WUX::Automation::AutomationProperties::SetName(row, winrt::hstring{ label });
+        if (isDirectory)
+        {
+            const auto weakThis = get_weak();
+            row.Tapped([weakThis, directory = path](const IInspectable&, const WUX::Input::TappedRoutedEventArgs& args) {
+                if (const auto page = weakThis.get())
+                {
+                    const auto entry = std::find_if(page->_workspaceFileEntries.begin(), page->_workspaceFileEntries.end(), [&](const auto& value) {
+                        return value.path == directory;
+                    });
+                    if (entry != page->_workspaceFileEntries.end())
+                    {
+                        entry->node.IsExpanded(!entry->node.IsExpanded());
+                        args.Handled(true);
+                    }
+                }
+            });
+        }
+        node.Content(row);
+        node.HasUnrealizedChildren(isDirectory);
+        _workspaceFileEntries.push_back({ node, path, isDirectory });
+        return node;
+    }
+
+    const TerminalPage::WorkspaceFileEntry* TerminalPage::_FindWorkspaceFileNode(const MUX::Controls::TreeViewNode& node) const
+    {
+        const auto entry = std::find_if(_workspaceFileEntries.begin(), _workspaceFileEntries.end(), [&](const auto& value) {
+            return value.node == node;
+        });
+        return entry == _workspaceFileEntries.end() ? nullptr : &*entry;
+    }
+
+    void TerminalPage::_PopulateWorkspaceFileNode(const MUX::Controls::TreeViewNode& node)
+    {
+        const auto entry = _FindWorkspaceFileNode(node);
+        if (!entry || !entry->isDirectory)
+        {
+            return;
+        }
+        const auto directory = entry->path;
+        node.HasUnrealizedChildren(false);
+        node.Children().Clear();
 
         std::error_code error;
-        auto iterator = std::filesystem::directory_iterator(workspace->currentDirectory,
-                                                             std::filesystem::directory_options::skip_permission_denied,
-                                                             error);
+        auto iterator = std::filesystem::directory_iterator(directory,
+                                                            std::filesystem::directory_options::skip_permission_denied,
+                                                            error);
         const std::filesystem::directory_iterator end{};
-        while (!error && iterator != end && _workspaceFileEntries.size() < 500)
+        std::vector<std::pair<std::filesystem::path, bool>> children;
+        while (!error && iterator != end && children.size() < 500)
         {
             const auto& entry = *iterator;
             std::error_code entryError;
@@ -6125,103 +6198,466 @@ namespace winrt::TerminalApp::implementation
             const bool isSymlink = entry.is_symlink(entryError);
             if (!entryError && !(isDirectory && isSymlink))
             {
-                _workspaceFileEntries.push_back({ entry.path(), isDirectory });
+                children.emplace_back(entry.path(), isDirectory);
             }
             iterator.increment(error);
         }
 
         if (error)
         {
-            WorkspaceFileList().Items().Append(winrt::box_value(RS_(L"WorkspaceFolderReadError")));
+            WorkspaceFilesStatus().Text(RS_(L"WorkspaceFolderReadError"));
             return;
         }
 
-        std::sort(_workspaceFileEntries.begin(), _workspaceFileEntries.end(), [](const auto& left, const auto& right) {
-            if (left.isDirectory != right.isDirectory)
+        const bool hasMore = iterator != end;
+        std::sort(children.begin(), children.end(), [](const auto& left, const auto& right) {
+            if (left.second != right.second)
             {
-                return left.isDirectory;
+                return left.second;
             }
-            return _wcsicmp(left.path.filename().c_str(), right.path.filename().c_str()) < 0;
+            return _wcsicmp(left.first.filename().c_str(), right.first.filename().c_str()) < 0;
         });
 
-        for (uint32_t i = 0; i < _workspaceFileEntries.size(); ++i)
+        for (const auto& [path, isDirectory] : children)
         {
-            const auto& entry = _workspaceFileEntries[i];
-            ListViewItem item{};
-            const std::wstring label = (entry.isDirectory ? L"[+] " : L"    ") + entry.path.filename().native();
-            item.Content(winrt::box_value(winrt::hstring{ label }));
-            item.Tag(winrt::box_value(i));
-            WorkspaceFileList().Items().Append(item);
+            node.Children().Append(_CreateWorkspaceFileNode(path, isDirectory));
         }
+        WorkspaceFilesStatus().Text(RS_(L"WorkspaceFilesShownPrefix") + winrt::hstring{ std::to_wstring(children.size()) } + (hasMore ? L"+" : L""));
     }
 
-    void TerminalPage::_CloseWorkspacePreview()
+    void TerminalPage::_WorkspaceFileInvoked(const MUX::Controls::TreeView&, const MUX::Controls::TreeViewItemInvokedEventArgs& args)
     {
-        WorkspacePreviewPanel().Visibility(Visibility::Collapsed);
-        WorkspacePreviewColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
-        WorkspacePreviewText().Text(L"");
-    }
-
-    void TerminalPage::_PreviewWorkspaceFile(const std::filesystem::path& path)
-    {
-        WorkspacePreviewTitle().Text(winrt::hstring{ path.filename().native() });
-        WorkspacePreviewPanel().Visibility(Visibility::Visible);
-        const auto width = std::clamp(SideTabLayout().ActualWidth() * 0.35, 220.0, 420.0);
-        WorkspacePreviewColumn().Width(GridLengthHelper::FromValueAndType(width, GridUnitType::Pixel));
-
-        constexpr size_t maxPreviewBytes = 128 * 1024;
-        std::ifstream file{ path, std::ios::binary };
-        if (!file)
+        const auto node = args.InvokedItem().try_as<MUX::Controls::TreeViewNode>();
+        if (const auto entry = _FindWorkspaceFileNode(node))
         {
-            WorkspacePreviewText().Text(RS_(L"WorkspaceFileReadError"));
-            return;
-        }
-
-        std::string bytes(maxPreviewBytes + 1, '\0');
-        file.read(bytes.data(), bytes.size());
-        bytes.resize(static_cast<size_t>(file.gcount()));
-        const bool truncated = bytes.size() > maxPreviewBytes;
-        if (truncated)
-        {
-            bytes.resize(maxPreviewBytes);
-        }
-
-        winrt::hstring preview;
-        if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE)
-        {
-            std::wstring utf16;
-            for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+            if (entry->isDirectory)
             {
-                utf16.push_back(static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) |
-                                                     (static_cast<unsigned char>(bytes[i + 1]) << 8)));
+                node.IsExpanded(!node.IsExpanded());
             }
-            preview = winrt::hstring{ utf16 };
+            else
+            {
+                try
+                {
+                    _OpenWorkspaceDocument(entry->path, false);
+                }
+                catch (const winrt::hresult_error& error)
+                {
+                    WorkspaceFilesStatus().Text(error.message());
+                }
+            }
         }
-        else if (std::find(bytes.begin(), bytes.end(), '\0') != bytes.end())
+    }
+
+    void TerminalPage::_WorkspaceFileExpanding(const MUX::Controls::TreeView&, const MUX::Controls::TreeViewExpandingEventArgs& args)
+    {
+        if (args.Node().HasUnrealizedChildren())
         {
-            preview = RS_(L"WorkspaceBinaryFileMessage");
+            _PopulateWorkspaceFileNode(args.Node());
         }
-        else
+    }
+
+    void TerminalPage::_WorkspaceFileDoubleTapped(const IInspectable&, const WUX::Input::DoubleTappedRoutedEventArgs& args)
+    {
+        if (const auto entry = _FindWorkspaceFileNode(WorkspaceFileTree().SelectedNode()); entry && !entry->isDirectory)
         {
             try
             {
-                std::string_view view{ bytes };
-                if (view.starts_with("\xEF\xBB\xBF"))
-                {
-                    view.remove_prefix(3);
-                }
-                preview = winrt::to_hstring(view);
+                _OpenWorkspaceDocument(entry->path, true);
             }
-            catch (...)
+            catch (const winrt::hresult_error& error)
             {
-                preview = RS_(L"WorkspaceUnsupportedEncodingMessage");
+                WorkspaceFilesStatus().Text(error.message());
+            }
+            args.Handled(true);
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileSearchChanged(const IInspectable&, const TextChangedEventArgs&)
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace || workspace->root.empty())
+        {
+            return;
+        }
+
+        const auto query = WorkspaceFileSearchBox().Text();
+        const auto version = ++_workspaceSearchVersion;
+        const bool searching = !query.empty();
+        WorkspaceFileTree().Visibility(searching ? Visibility::Collapsed : Visibility::Visible);
+        WorkspaceFileSearchResults().Visibility(searching ? Visibility::Visible : Visibility::Collapsed);
+        _workspaceSearchResults.clear();
+        WorkspaceFileSearchResults().Items().Clear();
+        if (searching)
+        {
+            WorkspaceFilesStatus().Text(RS_(L"WorkspaceSearchRunning"));
+            _SearchWorkspaceFilesAsync(_activeWorkspaceId, workspace->root, query, version);
+        }
+        else
+        {
+            _RefreshWorkspaceFiles();
+        }
+    }
+
+    safe_void_coroutine TerminalPage::_SearchWorkspaceFilesAsync(winrt::hstring workspaceId, std::filesystem::path root, winrt::hstring query, const uint64_t version)
+    {
+        const auto weakThis = get_weak();
+        const auto dispatcher = Dispatcher();
+        co_await winrt::resume_after(150ms);
+        co_await wil::resume_foreground(dispatcher);
+        if (const auto page = weakThis.get(); !page || page->_workspaceSearchVersion != version || page->_activeWorkspaceId != workspaceId)
+        {
+            co_return;
+        }
+
+        co_await winrt::resume_background();
+        std::wstring lowerQuery{ std::wstring_view{ query } };
+        std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), [](wchar_t ch) { return std::towlower(ch); });
+        std::vector<std::filesystem::path> results;
+        std::error_code error;
+        auto iterator = std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, error);
+        const std::filesystem::recursive_directory_iterator end{};
+        size_t scanned = 0;
+        while (!error && iterator != end && scanned < 20000 && results.size() < 100)
+        {
+            const auto& entry = *iterator;
+            std::error_code entryError;
+            if (entry.is_directory(entryError))
+            {
+                auto name = entry.path().filename().wstring();
+                std::transform(name.begin(), name.end(), name.begin(), [](wchar_t ch) { return std::towlower(ch); });
+                if (name == L".git" || name == L"node_modules" || name == L"packages" || name == L"bin" || name == L"obj" || name == L"build")
+                {
+                    iterator.disable_recursion_pending();
+                }
+            }
+            else if (entry.is_regular_file(entryError))
+            {
+                auto relative = entry.path().lexically_relative(root).wstring();
+                std::transform(relative.begin(), relative.end(), relative.begin(), [](wchar_t ch) { return std::towlower(ch); });
+                if (relative.find(lowerQuery) != std::wstring::npos)
+                {
+                    results.push_back(entry.path());
+                }
+            }
+            ++scanned;
+            iterator.increment(error);
+        }
+        const bool limited = iterator != end || static_cast<bool>(error);
+
+        co_await wil::resume_foreground(dispatcher);
+        if (const auto page = weakThis.get(); page && page->_workspaceSearchVersion == version && page->_activeWorkspaceId == workspaceId)
+        {
+            page->_workspaceSearchResults = std::move(results);
+            for (uint32_t i = 0; i < page->_workspaceSearchResults.size(); ++i)
+            {
+                ListViewItem item{};
+                const auto relative = page->_workspaceSearchResults[i].lexically_relative(root);
+                item.Content(winrt::box_value(winrt::hstring{ relative.native() }));
+                page->WorkspaceFileSearchResults().Items().Append(item);
+            }
+            page->WorkspaceFilesStatus().Text(RS_(L"WorkspaceSearchResultsPrefix") + winrt::hstring{ std::to_wstring(page->_workspaceSearchResults.size()) } + (limited ? L"+" : L""));
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileSearchResultSelected(const IInspectable&, const SelectionChangedEventArgs&)
+    {
+        const auto index = WorkspaceFileSearchResults().SelectedIndex();
+        if (index >= 0 && static_cast<size_t>(index) < _workspaceSearchResults.size())
+        {
+            try
+            {
+                _OpenWorkspaceDocument(_workspaceSearchResults[index], false);
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                WorkspaceFilesStatus().Text(error.message());
             }
         }
-        if (truncated)
+    }
+
+    void TerminalPage::_WorkspaceFileSearchResultDoubleTapped(const IInspectable&, const WUX::Input::DoubleTappedRoutedEventArgs& args)
+    {
+        const auto index = WorkspaceFileSearchResults().SelectedIndex();
+        if (index >= 0 && static_cast<size_t>(index) < _workspaceSearchResults.size())
         {
-            preview = preview + L"\r\n\r\n" + RS_(L"WorkspacePreviewTruncatedMessage");
+            try
+            {
+                _OpenWorkspaceDocument(_workspaceSearchResults[index], true);
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                WorkspaceFilesStatus().Text(error.message());
+            }
+            args.Handled(true);
         }
-        WorkspacePreviewText().Text(preview);
+    }
+
+    void TerminalPage::_OpenWorkspaceDocument(const std::filesystem::path& path, const bool pin)
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace)
+        {
+            return;
+        }
+
+        const auto normalizedPath = path.lexically_normal();
+        auto found = _workspaceDocuments.end();
+        auto preview = _workspaceDocuments.end();
+        for (auto it = _workspaceDocuments.begin(); it != _workspaceDocuments.end(); ++it)
+        {
+            if (it->workspaceId == _activeWorkspaceId)
+            {
+                if (it->path == normalizedPath)
+                {
+                    found = it;
+                    break;
+                }
+                if (!it->pinned)
+                {
+                    preview = it;
+                }
+            }
+        }
+        if (found == _workspaceDocuments.end())
+        {
+            if (preview != _workspaceDocuments.end())
+            {
+                found = preview;
+                found->path = normalizedPath;
+            }
+            else
+            {
+                _workspaceDocuments.push_back({ _activeWorkspaceId, normalizedPath, MUX::Controls::TabViewItem{}, pin });
+                found = std::prev(_workspaceDocuments.end());
+            }
+        }
+        found->pinned = found->pinned || pin;
+        workspace->selectedDocument = normalizedPath;
+        workspace->documentVisible = true;
+        _RefreshWorkspaceDocumentTabs();
+    }
+
+    void TerminalPage::_RefreshWorkspaceDocumentTabs()
+    {
+        ++_workspaceDocumentVersion;
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        _updatingDocumentTabs = true;
+        WorkspaceDocumentTabs().TabItems().Clear();
+        MUX::Controls::TabViewItem selected{ nullptr };
+        for (auto& document : _workspaceDocuments)
+        {
+            if (document.workspaceId != _activeWorkspaceId)
+            {
+                continue;
+            }
+            TextBlock title{};
+            title.Text(winrt::hstring{ document.path.filename().native() });
+            title.FontStyle(document.pinned ? FontStyle::Normal : FontStyle::Italic);
+            document.tab.Header(title);
+            document.tab.IsClosable(true);
+            WorkspaceDocumentTabs().TabItems().Append(document.tab);
+            if (workspace && document.path == workspace->selectedDocument)
+            {
+                selected = document.tab;
+            }
+        }
+        if (!selected && WorkspaceDocumentTabs().TabItems().Size() > 0)
+        {
+            selected = WorkspaceDocumentTabs().TabItems().GetAt(0).as<MUX::Controls::TabViewItem>();
+            if (workspace)
+            {
+                const auto entry = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) { return value.tab == selected; });
+                if (entry != _workspaceDocuments.end())
+                {
+                    workspace->selectedDocument = entry->path;
+                }
+            }
+        }
+        WorkspaceDocumentTabs().SelectedItem(selected);
+        _updatingDocumentTabs = false;
+        _UpdateWorkspaceDocumentLayout();
+        if (workspace && selected && workspace->documentVisible)
+        {
+            _LoadWorkspaceDocument(workspace->selectedDocument);
+        }
+    }
+
+    void TerminalPage::_LoadWorkspaceDocument(const std::filesystem::path& path)
+    {
+        const auto version = ++_workspaceDocumentVersion;
+        const auto editor = WorkspaceDocumentEditor();
+        _workspaceDocumentLineCount = 0;
+        WorkspaceDocumentLineStatus().Text(L"");
+        editor.IsReadOnly(false);
+        const auto restoreReadOnly = wil::scope_exit([&]() noexcept { editor.IsReadOnly(true); });
+        try
+        {
+            WorkspaceDocumentStatus().Text(winrt::hstring{ path.native() });
+
+            constexpr size_t maxPreviewBytes = 512 * 1024;
+            std::ifstream file{ path, std::ios::binary };
+            if (!file)
+            {
+                editor.Document().SetText(TextSetOptions::None, RS_(L"WorkspaceFileReadError"));
+                return;
+            }
+
+            std::string bytes(maxPreviewBytes + 1, '\0');
+            file.read(bytes.data(), bytes.size());
+            bytes.resize(static_cast<size_t>(file.gcount()));
+            const bool truncated = bytes.size() > maxPreviewBytes;
+            if (truncated)
+            {
+                bytes.resize(maxPreviewBytes);
+            }
+
+            winrt::hstring preview;
+            if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE)
+            {
+                std::wstring utf16;
+                for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+                {
+                    utf16.push_back(static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) |
+                                                         (static_cast<unsigned char>(bytes[i + 1]) << 8)));
+                }
+                preview = winrt::hstring{ utf16 };
+            }
+            else if (std::find(bytes.begin(), bytes.end(), '\0') != bytes.end())
+            {
+                preview = RS_(L"WorkspaceBinaryFileMessage");
+            }
+            else
+            {
+                try
+                {
+                    std::string_view view{ bytes };
+                    if (view.starts_with("\xEF\xBB\xBF"))
+                    {
+                        view.remove_prefix(3);
+                    }
+                    preview = winrt::to_hstring(view);
+                }
+                catch (...)
+                {
+                    preview = RS_(L"WorkspaceUnsupportedEncodingMessage");
+                }
+            }
+            if (truncated)
+            {
+                WorkspaceDocumentStatus().Text(WorkspaceDocumentStatus().Text() + L" — " + RS_(L"WorkspacePreviewTruncatedMessage"));
+            }
+            const auto document = editor.Document();
+            document.SetText(TextSetOptions::None, preview);
+            winrt::hstring renderedText;
+            document.GetText(TextGetOptions::None, renderedText);
+            const auto previewView = std::wstring_view{ preview };
+            const auto lineFeeds = std::count(previewView.begin(), previewView.end(), L'\n');
+            _workspaceDocumentLineCount = 1 + (lineFeeds ? lineFeeds : std::count(previewView.begin(), previewView.end(), L'\r'));
+            const bool dark = editor.ActualTheme() != ElementTheme::Light;
+            const auto baseColor = dark ? Windows::UI::Color{ 255, 212, 212, 212 } : Windows::UI::Color{ 255, 32, 32, 32 };
+            document.GetRange(0, static_cast<int32_t>(renderedText.size())).CharacterFormat().ForegroundColor(baseColor);
+            auto result = WorkspaceSyntax::Highlight(std::wstring_view{ renderedText }, WorkspaceSyntax::Detect(path));
+            if (result.limited)
+            {
+                WorkspaceDocumentStatus().Text(WorkspaceDocumentStatus().Text() + L" — " + RS_(L"WorkspaceHighlightLimitedMessage"));
+            }
+            _UpdateWorkspaceDocumentCaretStatus();
+            if (!result.spans.empty())
+            {
+                _ApplyWorkspaceHighlightAsync(std::move(result.spans), dark, version);
+            }
+        }
+        catch (const winrt::hresult_error& error)
+        {
+            WorkspaceDocumentStatus().Text(error.message());
+        }
+    }
+
+    safe_void_coroutine TerminalPage::_ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, const bool dark, const uint64_t version)
+    {
+        const auto weakThis = get_weak();
+        const auto dispatcher = Dispatcher();
+        constexpr size_t batchSize = 96;
+        for (size_t start = 0; start < spans.size(); start += batchSize)
+        {
+            co_await winrt::resume_after(1ms);
+            co_await wil::resume_foreground(dispatcher);
+            const auto page = weakThis.get();
+            if (!page || page->_workspaceDocumentVersion != version)
+            {
+                co_return;
+            }
+
+            try
+            {
+                const auto editor = page->WorkspaceDocumentEditor();
+                editor.IsReadOnly(false);
+                const auto restoreReadOnly = wil::scope_exit([&]() noexcept { editor.IsReadOnly(true); });
+                const auto document = editor.Document();
+                const auto end = std::min(start + batchSize, spans.size());
+                for (size_t i = start; i < end; ++i)
+                {
+                    const auto& span = spans[i];
+                    Windows::UI::Color color;
+                    switch (span.kind)
+                    {
+                    case WorkspaceSyntax::Kind::Keyword:
+                        color = dark ? Windows::UI::Color{ 255, 86, 156, 214 } : Windows::UI::Color{ 255, 0, 0, 180 };
+                        break;
+                    case WorkspaceSyntax::Kind::String:
+                        color = dark ? Windows::UI::Color{ 255, 206, 145, 120 } : Windows::UI::Color{ 255, 163, 21, 21 };
+                        break;
+                    case WorkspaceSyntax::Kind::Comment:
+                        color = dark ? Windows::UI::Color{ 255, 106, 153, 85 } : Windows::UI::Color{ 255, 0, 128, 0 };
+                        break;
+                    case WorkspaceSyntax::Kind::Number:
+                        color = dark ? Windows::UI::Color{ 255, 181, 206, 168 } : Windows::UI::Color{ 255, 9, 134, 88 };
+                        break;
+                    case WorkspaceSyntax::Kind::Heading:
+                        color = dark ? Windows::UI::Color{ 255, 86, 156, 214 } : Windows::UI::Color{ 255, 0, 0, 180 };
+                        break;
+                    case WorkspaceSyntax::Kind::Tag:
+                        color = dark ? Windows::UI::Color{ 255, 78, 201, 176 } : Windows::UI::Color{ 255, 128, 0, 128 };
+                        break;
+                    case WorkspaceSyntax::Kind::Variable:
+                        color = dark ? Windows::UI::Color{ 255, 156, 220, 254 } : Windows::UI::Color{ 255, 0, 100, 180 };
+                        break;
+                    }
+                    document.GetRange(static_cast<int32_t>(span.start), static_cast<int32_t>(span.end)).CharacterFormat().ForegroundColor(color);
+                }
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                page->WorkspaceDocumentStatus().Text(error.message());
+                co_return;
+            }
+        }
+    }
+
+    void TerminalPage::_UpdateWorkspaceDocumentCaretStatus()
+    {
+        if (_workspaceDocumentLineCount == 0)
+        {
+            WorkspaceDocumentLineStatus().Text(L"");
+            return;
+        }
+        try
+        {
+            const auto lineIndex = std::clamp(WorkspaceDocumentEditor().Document().Selection().GetIndex(TextRangeUnit::Line),
+                                              1,
+                                              static_cast<int32_t>(_workspaceDocumentLineCount));
+            WorkspaceDocumentLineStatus().Text(RS_(L"WorkspaceLinePrefix") + winrt::hstring{ std::to_wstring(lineIndex) } +
+                                               L" / " + winrt::hstring{ std::to_wstring(_workspaceDocumentLineCount) });
+        }
+        catch (const winrt::hresult_error&)
+        {
+            WorkspaceDocumentLineStatus().Text(L"");
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentCaretChanged(const IInspectable&, const RoutedEventArgs&)
+    {
+        _UpdateWorkspaceDocumentCaretStatus();
     }
 
     void TerminalPage::_WorkspaceChangeFolderClick(const IInspectable&, const RoutedEventArgs&)
@@ -6229,49 +6665,153 @@ namespace winrt::TerminalApp::implementation
         _PickWorkspaceFolder();
     }
 
-    void TerminalPage::_WorkspaceUpClick(const IInspectable&, const RoutedEventArgs&)
-    {
-        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
-        {
-            if (workspace->currentDirectory != workspace->root)
-            {
-                workspace->currentDirectory = workspace->currentDirectory.parent_path();
-                _RefreshWorkspaceFiles();
-            }
-        }
-    }
-
     void TerminalPage::_WorkspaceRefreshClick(const IInspectable&, const RoutedEventArgs&)
     {
+        WorkspaceFileSearchBox().Text(L"");
         _RefreshWorkspaceFiles();
     }
 
-    void TerminalPage::_WorkspaceFileSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
+    void TerminalPage::_WorkspaceDocumentSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
     {
-        const auto index = WorkspaceFileList().SelectedIndex();
-        if (index < 0 || static_cast<size_t>(index) >= _workspaceFileEntries.size())
+        if (_updatingDocumentTabs)
         {
             return;
         }
-        const auto entry = _workspaceFileEntries[index];
-        if (entry.isDirectory)
+        const auto selected = WorkspaceDocumentTabs().SelectedItem().try_as<MUX::Controls::TabViewItem>();
+        const auto document = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) {
+            return value.workspaceId == _activeWorkspaceId && value.tab == selected;
+        });
+        if (document != _workspaceDocuments.end())
         {
             if (auto workspace = _FindWorkspace(_activeWorkspaceId))
             {
-                workspace->currentDirectory = entry.path;
-                _RefreshWorkspaceFiles();
+                workspace->selectedDocument = document->path;
+                workspace->documentVisible = true;
             }
+            _UpdateWorkspaceDocumentLayout();
+            _LoadWorkspaceDocument(document->path);
         }
-        else
+    }
+
+    void TerminalPage::_WorkspaceDocumentTabCloseRequested(const IInspectable&, const MUX::Controls::TabViewTabCloseRequestedEventArgs& args)
+    {
+        const auto item = args.Tab();
+        const auto document = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) {
+            return value.workspaceId == _activeWorkspaceId && value.tab == item;
+        });
+        if (document == _workspaceDocuments.end())
         {
-            _PreviewWorkspaceFile(entry.path);
-            WorkspaceFileList().SelectedIndex(-1);
+            return;
         }
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && workspace->selectedDocument == document->path)
+        {
+            workspace->selectedDocument.clear();
+        }
+        _workspaceDocuments.erase(document);
+        _RefreshWorkspaceDocumentTabs();
+    }
+
+    void TerminalPage::_CloseWorkspacePreview()
+    {
+        ++_workspaceDocumentVersion;
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            workspace->documentVisible = false;
+        }
+        _UpdateWorkspaceDocumentLayout();
     }
 
     void TerminalPage::_WorkspaceClosePreviewClick(const IInspectable&, const RoutedEventArgs&)
     {
         _CloseWorkspacePreview();
+    }
+
+    void TerminalPage::_WorkspaceDocumentMaximizeClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            workspace->documentMaximized = !workspace->documentMaximized;
+            _UpdateWorkspaceDocumentLayout();
+        }
+    }
+
+    void TerminalPage::_UpdateWorkspaceDocumentLayout()
+    {
+        WorkspaceDocumentTopInset().Height(GridLengthHelper::FromValueAndType(_tabPosition == TabPosition::Left ? 48.0 : 0.0, GridUnitType::Pixel));
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        const bool showDocument = workspace && workspace->documentVisible && !workspace->selectedDocument.empty();
+        WorkspaceDocumentPanel().Visibility(showDocument ? Visibility::Visible : Visibility::Collapsed);
+        if (!showDocument)
+        {
+            WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star));
+            WorkspaceDocumentColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+            WorkspaceDocumentDivider().Visibility(Visibility::Collapsed);
+            return;
+        }
+
+        const auto availableWidth = WorkspaceContentArea().ActualWidth();
+        const bool maximize = workspace->documentMaximized || (availableWidth > 0 && availableWidth < 520.0);
+        const auto maximizeCaption = workspace->documentMaximized ? RS_(L"WorkspaceDocumentRestore") : RS_(L"WorkspaceDocumentMaximize");
+        WorkspaceDocumentMaximizeButton().Content(winrt::box_value(maximizeCaption));
+        if (maximize)
+        {
+            WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+            WorkspaceDocumentColumn().Width(GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star));
+            WorkspaceDocumentDivider().Visibility(Visibility::Collapsed);
+        }
+        else
+        {
+            const auto minimumPaneWidth = std::min(260.0, availableWidth * 0.46);
+            const auto maximumDocumentWidth = std::max(minimumPaneWidth, availableWidth - minimumPaneWidth);
+            workspace->documentWidth = std::clamp(workspace->documentWidth, minimumPaneWidth, maximumDocumentWidth);
+            WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star));
+            WorkspaceDocumentColumn().Width(GridLengthHelper::FromValueAndType(workspace->documentWidth, GridUnitType::Pixel));
+            WorkspaceDocumentDivider().Visibility(Visibility::Visible);
+        }
+    }
+
+    void TerminalPage::_WorkspaceContentSizeChanged(const IInspectable&, const WUX::SizeChangedEventArgs&)
+    {
+        _UpdateWorkspaceDocumentLayout();
+    }
+
+    void TerminalPage::_WorkspaceFilesDividerDragDelta(const IInspectable&, const WUX::Controls::Primitives::DragDeltaEventArgs& args)
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+        {
+            const auto availableWidth = SideTabLayout().ActualWidth() - SideTabColumn().ActualWidth();
+            const auto minimumWidth = std::min(160.0, availableWidth * 0.4);
+            const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
+            workspace->explorerWidth = std::clamp(workspace->explorerWidth + args.HorizontalChange(), minimumWidth, maximumWidth);
+            WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(workspace->explorerWidth, GridUnitType::Pixel));
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentDividerDragDelta(const IInspectable&, const WUX::Controls::Primitives::DragDeltaEventArgs& args)
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            workspace->documentWidth -= args.HorizontalChange();
+            _UpdateWorkspaceDocumentLayout();
+        }
+    }
+
+    void TerminalPage::_WorkspaceDividerDragCompleted(const IInspectable&, const WUX::Controls::Primitives::DragCompletedEventArgs&)
+    {
+        _SetSideTabDividerCursor(false);
+    }
+
+    void TerminalPage::_WorkspaceDividerPointerEntered(const IInspectable&, const WUX::Input::PointerRoutedEventArgs&)
+    {
+        _SetSideTabDividerCursor(true);
+    }
+
+    void TerminalPage::_WorkspaceDividerPointerExited(const IInspectable& sender, const WUX::Input::PointerRoutedEventArgs&)
+    {
+        if (const auto divider = sender.try_as<WUX::Controls::Primitives::Thumb>(); !divider || !divider.IsDragging())
+        {
+            _SetSideTabDividerCursor(false);
+        }
     }
 
     // Method Description:

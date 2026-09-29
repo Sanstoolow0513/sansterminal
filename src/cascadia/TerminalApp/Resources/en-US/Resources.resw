@@ -931,7 +931,34 @@
     <value>This text encoding cannot be previewed.</value>
   </data>
   <data name="WorkspacePreviewTruncatedMessage" xml:space="preserve">
-    <value>Preview limited to the first 128 KB.</value>
+    <value>Showing the first 512 KB.</value>
+  </data>
+  <data name="WorkspaceHighlightLimitedMessage" xml:space="preserve">
+    <value>Syntax color is limited in large files.</value>
+  </data>
+  <data name="WorkspaceFilesShownPrefix" xml:space="preserve">
+    <value>Items shown in folder: </value>
+  </data>
+  <data name="WorkspaceFileSearchBox.PlaceholderText" xml:space="preserve">
+    <value>Find a file in this workspace</value>
+  </data>
+  <data name="WorkspaceSearchRunning" xml:space="preserve">
+    <value>Searching files...</value>
+  </data>
+  <data name="WorkspaceSearchResultsPrefix" xml:space="preserve">
+    <value>Matching files: </value>
+  </data>
+  <data name="WorkspaceLinePrefix" xml:space="preserve">
+    <value>Line </value>
+  </data>
+  <data name="WorkspaceDocumentMaximize" xml:space="preserve">
+    <value>Expand</value>
+  </data>
+  <data name="WorkspaceDocumentRestore" xml:space="preserve">
+    <value>Restore</value>
+  </data>
+  <data name="WorkspaceDocumentMaximizeButton.Content" xml:space="preserve">
+    <value>Expand</value>
   </data>
   <data name="WorkspaceFilesHeader.Text" xml:space="preserve">
     <value>Files</value>
@@ -946,7 +973,7 @@
     <value>Refresh</value>
   </data>
   <data name="WorkspaceClosePreviewButton.Content" xml:space="preserve">
-    <value>Close</value>
+    <value>Hide</value>
   </data>
   <data name="CommandPalette_MatchesAvailable" xml:space="preserve">
     <value>Suggestions found: {0}</value>

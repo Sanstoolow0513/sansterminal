@@ -62,6 +62,7 @@
     <ClInclude Include="LanguageProfileNotifier.h" />
     <ClInclude Include="WindowsPackageManagerFactory.h" />
     <ClInclude Include="TerminalSettingsCache.h" />
+    <ClInclude Include="WorkspaceSyntaxHighlighter.h" />
   </ItemGroup>
   <ItemGroup>
     <Midl Include="AppLogic.idl">

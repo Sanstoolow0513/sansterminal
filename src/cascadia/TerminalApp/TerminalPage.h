@@ -19,6 +19,7 @@
 #include "Toast.h"
 
 #include "WindowsPackageManagerFactory.h"
+#include "WorkspaceSyntaxHighlighter.h"
 
 #include <filesystem>
 
@@ -291,11 +292,24 @@ namespace winrt::TerminalApp::implementation
             std::filesystem::path root;
             std::filesystem::path currentDirectory;
             winrt::TerminalApp::Tab lastFocused{ nullptr };
+            std::filesystem::path selectedDocument;
+            double explorerWidth{ 250.0 };
+            double documentWidth{ 520.0 };
+            bool documentVisible{ false };
+            bool documentMaximized{ false };
         };
         struct WorkspaceFileEntry
         {
+            Microsoft::UI::Xaml::Controls::TreeViewNode node{ nullptr };
             std::filesystem::path path;
             bool isDirectory;
+        };
+        struct WorkspaceDocument
+        {
+            winrt::hstring workspaceId;
+            std::filesystem::path path;
+            Microsoft::UI::Xaml::Controls::TabViewItem tab{ nullptr };
+            bool pinned{ false };
         };
         struct WorkspaceHubEntry
         {
@@ -305,9 +319,15 @@ namespace winrt::TerminalApp::implementation
         std::vector<WorkspaceSession> _workspaces;
         std::vector<std::pair<winrt::TerminalApp::Tab, winrt::hstring>> _tabWorkspaces;
         std::vector<WorkspaceFileEntry> _workspaceFileEntries;
+        std::vector<std::filesystem::path> _workspaceSearchResults;
+        std::vector<WorkspaceDocument> _workspaceDocuments;
         std::vector<WorkspaceHubEntry> _workspaceHubEntries;
         winrt::hstring _activeWorkspaceId;
         bool _changingWorkspace{ false };
+        bool _updatingDocumentTabs{ false };
+        uint64_t _workspaceSearchVersion{ 0 };
+        uint64_t _workspaceDocumentVersion{ 0 };
+        size_t _workspaceDocumentLineCount{ 0 };
         bool _hasStartupActions{ false };
         WorkspaceSession* _FindWorkspace(const winrt::hstring& id);
         winrt::hstring _WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const;
@@ -330,12 +350,35 @@ namespace winrt::TerminalApp::implementation
         void _UpdateWorkspaceTabVisibility();
         void _UpdateWorkspaceFilesUI();
         void _RefreshWorkspaceFiles();
+        void _PopulateWorkspaceFileNode(const Microsoft::UI::Xaml::Controls::TreeViewNode& node);
+        Microsoft::UI::Xaml::Controls::TreeViewNode _CreateWorkspaceFileNode(const std::filesystem::path& path, bool isDirectory);
+        const WorkspaceFileEntry* _FindWorkspaceFileNode(const Microsoft::UI::Xaml::Controls::TreeViewNode& node) const;
+        void _WorkspaceFileInvoked(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewItemInvokedEventArgs& args);
+        void _WorkspaceFileExpanding(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewExpandingEventArgs& args);
+        void _WorkspaceFileDoubleTapped(const IInspectable& sender, const Windows::UI::Xaml::Input::DoubleTappedRoutedEventArgs& args);
+        void _WorkspaceFileSearchChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::TextChangedEventArgs& args);
+        safe_void_coroutine _SearchWorkspaceFilesAsync(winrt::hstring workspaceId, std::filesystem::path root, winrt::hstring query, uint64_t version);
+        void _WorkspaceFileSearchResultSelected(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
+        void _WorkspaceFileSearchResultDoubleTapped(const IInspectable& sender, const Windows::UI::Xaml::Input::DoubleTappedRoutedEventArgs& args);
+        void _OpenWorkspaceDocument(const std::filesystem::path& path, bool pin);
+        void _RefreshWorkspaceDocumentTabs();
+        void _LoadWorkspaceDocument(const std::filesystem::path& path);
+        safe_void_coroutine _ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, bool dark, uint64_t version);
+        void _UpdateWorkspaceDocumentCaretStatus();
+        void _WorkspaceDocumentCaretChanged(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _UpdateWorkspaceDocumentLayout();
+        void _WorkspaceDocumentSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
+        void _WorkspaceDocumentTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& args);
+        void _WorkspaceDocumentMaximizeClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceContentSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
+        void _WorkspaceFilesDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
+        void _WorkspaceDocumentDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
+        void _WorkspaceDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
+        void _WorkspaceDividerPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _WorkspaceDividerPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _CloseWorkspacePreview();
-        void _PreviewWorkspaceFile(const std::filesystem::path& path);
         void _WorkspaceChangeFolderClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceUpClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceRefreshClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceFileSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
         void _WorkspaceClosePreviewClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         winrt::TerminalApp::ColorPickupFlyout _tabColorPicker{ nullptr };
 
