@@ -39,21 +39,8 @@
             MinWidth="45.0"
             DoubleTapped="DragBar_DoubleTapped" />
 
-    <!--
-        In overlay mode (side tabs), the caption buttons float over the
-        terminal content. The backdrop gives them a rounded, theme-aware chip
-        to sit on so the glyphs stay readable over arbitrary text. It is fully
-        transparent and margin-less in the classic layout.
-    -->
-    <Border x:Name="CaptionButtonsBackdrop"
-            Grid.Column="2"
-            Margin="0"
-            HorizontalAlignment="Right"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            CornerRadius="8"
-            Opacity="0">
-        <local:MinMaxCloseControl x:Name="MinMaxCloseControl" />
-    </Border>
+    <local:MinMaxCloseControl x:Name="MinMaxCloseControl"
+                             Grid.Column="2" />
 
     <!--  This border needs to be added manually until GH#10320 is fixed  -->
     <Border x:Name="TitlebarSeparator"

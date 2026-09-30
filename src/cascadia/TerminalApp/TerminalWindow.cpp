@@ -380,6 +380,13 @@ namespace winrt::TerminalApp::implementation
         }
 
         s_activeDialog = dialog;
+        // Native child surfaces must yield before a XAML modal is displayed.
+        // Restore them on cancellation and exceptions as well as normal close.
+        const auto restoreDialogState = wil::scope_exit([weak]() {
+            s_activeDialog = nullptr;
+            if (const auto self = weak.get()) self->DialogVisibilityChanged.raise(*self, false);
+        });
+        DialogVisibilityChanged.raise(*this, true);
 
         // IMPORTANT: This is necessary as documented in the ContentDialog MSDN docs.
         // Since we're hosting the dialog in a Xaml island, we need to connect it to the
@@ -421,7 +428,6 @@ namespace winrt::TerminalApp::implementation
             result = co_await dialog.ShowAsync(Controls::ContentDialogPlacement::Popup);
         }
 
-        s_activeDialog = nullptr;
         co_return result;
     }
 
@@ -962,15 +968,6 @@ namespace winrt::TerminalApp::implementation
         return _root ? _root->TitlebarBrush() : nullptr;
     }
 
-    bool TerminalWindow::TitlebarOverlayMode()
-    {
-        return _root ? _root->TitlebarOverlayMode() : false;
-    }
-
-    double TerminalWindow::TitlebarOverlayLeftInset()
-    {
-        return _root ? _root->TitlebarOverlayLeftInset() : 0.0;
-    }
     winrt::Windows::UI::Xaml::Media::Brush TerminalWindow::FrameBrush()
     {
         return _root ? _root->FrameBrush() : nullptr;

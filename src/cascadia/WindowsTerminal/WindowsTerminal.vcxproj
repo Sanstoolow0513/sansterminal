@@ -202,4 +202,29 @@
   <Import Project="$(OpenConsoleDir)\build\rules\GenerateSxsManifestsFromWinmds.targets" />
   <Import Project="$(OpenConsoleDir)src\common.nugetversions.targets" />
 
+  <!-- Explicit technical probe; the ordinary build needs neither Node nor Monaco. -->
+  <PropertyGroup Condition="'$(EnableEditorHostProbe)' == 'true'">
+    <EditorHostProbeArchitecture>$(Platform)</EditorHostProbeArchitecture>
+    <EditorHostProbeArchitecture Condition="'$(Platform)' == 'Win32'">x86</EditorHostProbeArchitecture>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(EnableEditorHostProbe)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>SANSTERMINAL_EDITOR_PROBE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(WebView2PackageRoot)\build\native\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(WebView2PackageRoot)\build\native\$(EditorHostProbeArchitecture)\WebView2LoaderStatic.lib;version.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(EnableEditorHostProbe)' == 'true'">
+    <ClCompile Include="EditorHostProbe.cpp" />
+    <ClInclude Include="EditorHostProbe.h" />
+    <EditorHostProbeAsset Include="..\EditorHostProbe\dist\**\*" />
+  </ItemGroup>
+  <Target Name="CopyEditorHostProbeAssets" AfterTargets="Build" Condition="'$(EnableEditorHostProbe)' == 'true'">
+    <Error Condition="!Exists('..\EditorHostProbe\dist\index.html')" Text="Build EditorHostProbe first: npm ci --ignore-scripts; npm run build in src/cascadia/EditorHostProbe." />
+    <Copy SourceFiles="@(EditorHostProbeAsset)" DestinationFiles="@(EditorHostProbeAsset->'$(OutDir)EditorHostProbe\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(WebView2PackageRoot)\LICENSE.txt;$(WebView2PackageRoot)\NOTICE.txt" DestinationFiles="$(OutDir)EditorHostProbe\LICENSE.webview2.txt;$(OutDir)EditorHostProbe\NOTICE.webview2.txt" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

@@ -262,8 +262,6 @@ namespace winrt::TerminalApp::implementation
         til::typed_event<IInspectable, winrt::TerminalApp::WindowRequestedArgs> RequestNewWindow;
 
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, TitlebarBrush, PropertyChanged.raise, nullptr);
-        WINRT_OBSERVABLE_PROPERTY(bool, TitlebarOverlayMode, PropertyChanged.raise, false);
-        WINRT_OBSERVABLE_PROPERTY(double, TitlebarOverlayLeftInset, PropertyChanged.raise, 0.0);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, FrameBrush, PropertyChanged.raise, nullptr);
 
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, SavedActionName, PropertyChanged.raise, L"");

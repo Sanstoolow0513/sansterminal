@@ -86,6 +86,11 @@ AppHost::AppHost(WindowEmperor* manager, const winrt::TerminalApp::AppLogic& log
 
 bool AppHost::OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down)
 {
+#ifdef SANSTERMINAL_EDITOR_PROBE
+    // The XAML focus tree still remembers the terminal while the native
+    // browser owns focus. Do not deliver its shortcuts to that stale target.
+    if (_editorProbe && _editorProbe->HasFocus()) return false;
+#endif
     if (_windowLogic)
     {
         return _windowLogic.OnDirectKeyEvent(vkey, scanCode, down);
@@ -320,12 +325,27 @@ void AppHost::Initialize()
 
     // Set up the content of the application. If the app has a custom titlebar,
     // set that content as well.
-    _window->SetContent(_windowLogic.GetRoot());
+#ifdef SANSTERMINAL_EDITOR_PROBE
+    wchar_t probeEnabled[2]{};
+    if (GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1')
+    {
+        _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
+        _window->SetContent(_editorProbe->CreateContent());
+    }
+    else
+#endif
+    {
+        _window->SetContent(_windowLogic.GetRoot());
+    }
     _window->OnAppInitialized();
 }
 
 void AppHost::Close()
 {
+#ifdef SANSTERMINAL_EDITOR_PROBE
+    if (_editorProbe) _editorProbe->Close();
+    _editorProbe.reset();
+#endif
     // After calling _window->Close() we should avoid creating more WinUI related actions.
     // I suspect WinUI wouldn't like that very much. As such unregister all event handlers first.
     _revokers = {};
@@ -1242,22 +1262,6 @@ void AppHost::_PropertyChangedHandler(const winrt::Windows::Foundation::IInspect
             auto nonClientWindow{ static_cast<NonClientIslandWindow*>(_window.get()) };
             nonClientWindow->SetTitlebarBackground(_windowLogic.TitlebarBrush());
             _updateTheme();
-        }
-    }
-    else if (e.PropertyName() == L"TitlebarOverlayMode")
-    {
-        if (_useNonClientArea)
-        {
-            auto nonClientWindow{ static_cast<NonClientIslandWindow*>(_window.get()) };
-            nonClientWindow->SetTitlebarOverlayMode(_windowLogic.TitlebarOverlayMode());
-        }
-    }
-    else if (e.PropertyName() == L"TitlebarOverlayLeftInset")
-    {
-        if (_useNonClientArea)
-        {
-            auto nonClientWindow{ static_cast<NonClientIslandWindow*>(_window.get()) };
-            nonClientWindow->SetTitlebarOverlayLeftInset(_windowLogic.TitlebarOverlayLeftInset());
         }
     }
     else if (e.PropertyName() == L"FrameBrush")

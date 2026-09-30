@@ -122,25 +122,24 @@
                       Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
                       Visibility="Collapsed">
                     <Grid.RowDefinitions>
-                        <RowDefinition x:Name="WorkspaceDocumentTopInset" Height="0" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <mux:TabView x:Name="WorkspaceDocumentTabs"
-                                 Grid.Row="1"
+                                 Grid.Row="0"
                                  IsAddTabButtonVisible="False"
                                  TabWidthMode="SizeToContent"
                                  SelectionChanged="_WorkspaceDocumentSelectionChanged"
                                  TabCloseRequested="_WorkspaceDocumentTabCloseRequested" />
                     <RichEditBox x:Name="WorkspaceDocumentEditor"
-                                 Grid.Row="2"
+                                 Grid.Row="1"
                                  Margin="8,0,8,4"
                                  FontFamily="Cascadia Mono"
                                  IsReadOnly="True"
                                  SelectionChanged="_WorkspaceDocumentCaretChanged"
                                  TextWrapping="NoWrap" />
-                    <Grid Grid.Row="3"
+                    <Grid Grid.Row="2"
                           Margin="12,2,8,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -284,7 +283,7 @@
             floats over the terminal.
         -->
         <Grid x:Name="SideTabDock"
-              Grid.RowSpan="3"
+              Grid.Row="2"
               Width="40"
               Height="40"
               Margin="8,6,0,0"

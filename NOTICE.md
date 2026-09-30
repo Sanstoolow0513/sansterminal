@@ -533,3 +533,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
+
+## Monaco Editor (optional editor host probe)
+
+Source: https://github.com/microsoft/monaco-editor (version 0.57.0, MIT).
+The optional probe ships its license in EditorHostProbe/LICENSE.monaco.txt and
+its dependency notices in EditorHostProbe/ThirdPartyNotices.monaco.txt.
+
+## Microsoft.Web.WebView2 (optional editor host probe)
+
+The probe links the WebView2 SDK loader (1.0.1661.34). Its license and notices
+are shipped in EditorHostProbe/LICENSE.webview2.txt and EditorHostProbe/NOTICE.webview2.txt.

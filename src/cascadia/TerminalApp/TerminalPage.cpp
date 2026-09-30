@@ -381,25 +381,6 @@ namespace winrt::TerminalApp::implementation
 
             tabRowImpl->SetVertical(true);
 
-            // Ask the host window to float the caption buttons over the
-            // content instead of reserving a titlebar row (see
-            // NonClientIslandWindow::SetTitlebarOverlayMode). Ignored by hosts
-            // without a non-client island.
-            TitlebarOverlayMode(true);
-
-            if (_currentWindowSettings().ShowTabsInTitlebar())
-            {
-                // Keep notifications below the floating chrome without giving
-                // the page a 48-DIP layout row. A margin on the original Auto
-                // row pushed the terminal down and looked like a leftover
-                // native titlebar. Put the container over the content instead.
-                const auto infoBarContainer = InfoBarContainer();
-                WUX::Controls::Grid::SetRow(infoBarContainer, 2);
-                WUX::Controls::Canvas::SetZIndex(infoBarContainer, 2);
-                infoBarContainer.VerticalAlignment(WUX::VerticalAlignment::Top);
-                infoBarContainer.Margin(WUX::ThicknessHelper::FromLengths(0, 48, 0, 0));
-            }
-
             // Left mode starts expanded; the compact toggle can collapse the
             // sidebar column without changing the user's chosen width.
             _UpdateTabView();
@@ -6668,7 +6649,6 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_UpdateWorkspaceDocumentLayout()
     {
-        WorkspaceDocumentTopInset().Height(GridLengthHelper::FromValueAndType(_tabPosition == TabPosition::Left ? 48.0 : 0.0, GridUnitType::Pixel));
         const auto workspace = _FindWorkspace(_activeWorkspaceId);
         const bool showDocument = workspace && workspace->documentVisible && !workspace->selectedDocument.empty();
         WorkspaceDocumentPanel().Visibility(showDocument ? Visibility::Visible : Visibility::Collapsed);
@@ -6779,11 +6759,6 @@ namespace winrt::TerminalApp::implementation
         }
         SideTabDockCard().Visibility(show ? Visibility::Collapsed : Visibility::Visible);
         SideTabDock().Opacity(show ? 1.0 : 0.75);
-
-        // Keep the window's drag region off the sidebar toolbar (open) or
-        // just the floating toggle (collapsed).
-        static constexpr auto collapsedDockInset = 56.0;
-        TitlebarOverlayLeftInset(show ? _sideTabWidth : collapsedDockInset);
     }
 
     void TerminalPage::_ResizeSideTabColumn(double requestedWidth)
@@ -6798,7 +6773,6 @@ namespace winrt::TerminalApp::implementation
         const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
         _sideTabWidth = std::clamp(requestedWidth, minimumWidth, maximumWidth);
         SideTabColumn().Width(GridLengthHelper::FromValueAndType(_sideTabWidth, GridUnitType::Pixel));
-        TitlebarOverlayLeftInset(_sideTabWidth);
     }
 
     void TerminalPage::_SideTabLayoutSizeChanged(const IInspectable& /*sender*/, const WUX::SizeChangedEventArgs& /*e*/)

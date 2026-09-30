@@ -114,6 +114,12 @@ HWND IslandWindow::GetInteropHandle() const
     return _interopWindowHandle;
 }
 
+void IslandWindow::FocusContent()
+{
+    _source.NavigateFocus(winrt::Windows::UI::Xaml::Hosting::XamlSourceFocusNavigationRequest{
+        winrt::Windows::UI::Xaml::Hosting::XamlSourceFocusNavigationReason::Restore });
+}
+
 // Method Description:
 // - Create the actual window that we'll use for the application.
 // Arguments:

@@ -7,6 +7,10 @@
 #include "NonClientIslandWindow.h"
 #include <ThrottledFunc.h>
 
+#ifdef SANSTERMINAL_EDITOR_PROBE
+#include "EditorHostProbe.h"
+#endif
+
 class WindowEmperor;
 
 class AppHost : public std::enable_shared_from_this<AppHost>
@@ -37,6 +41,9 @@ private:
 
     WindowEmperor* _windowManager = nullptr;
     std::unique_ptr<IslandWindow> _window;
+#ifdef SANSTERMINAL_EDITOR_PROBE
+    std::shared_ptr<EditorHostProbe> _editorProbe;
+#endif
     winrt::TerminalApp::AppLogic _appLogic{ nullptr };
     winrt::TerminalApp::TerminalWindow _windowLogic{ nullptr };
     std::shared_ptr<ThrottledFunc<bool>> _showHideWindowThrottler;
