@@ -283,6 +283,12 @@ namespace winrt::TerminalApp::implementation
         Windows::UI::Xaml::Controls::Grid _tabContent{ nullptr };
         Microsoft::UI::Xaml::Controls::SplitButton _newTabButton{ nullptr };
         Windows::UI::Xaml::Controls::Button _workspaceHomeButton{ nullptr };
+        struct WorkspaceFileEntry
+        {
+            Microsoft::UI::Xaml::Controls::TreeViewNode node{ nullptr };
+            std::filesystem::path path;
+            bool isDirectory;
+        };
         struct WorkspaceSession
         {
             winrt::hstring id;
@@ -294,12 +300,28 @@ namespace winrt::TerminalApp::implementation
             double explorerWidth{ 250.0 };
             double documentWidth{ 520.0 };
             bool documentVisible{ false };
+            bool preferTerminalInCompactView{ false };
+            Microsoft::UI::Xaml::Controls::TreeViewNode navigationNode{ nullptr };
+            std::vector<WorkspaceFileEntry> fileEntries;
+            Microsoft::UI::Xaml::Controls::TreeViewNode fileRoot{ nullptr };
+            Microsoft::UI::Xaml::Controls::TreeViewNode selectedFile{ nullptr };
+            winrt::hstring searchQuery;
+            std::filesystem::path selectedSearchResult;
+            winrt::hstring treeStatus;
+            double treeScrollOffset{ 0.0 };
+            double searchScrollOffset{ 0.0 };
+            winrt::hstring previewRtf;
+            winrt::hstring previewStatus;
+            std::filesystem::path previewPath;
+            int32_t previewSelectionStart{ 0 };
+            int32_t previewSelectionEnd{ 0 };
+            double previewScrollOffset{ 0.0 };
+            size_t previewLineCount{ 0 };
         };
-        struct WorkspaceFileEntry
+        struct WorkspaceNavigationEntry
         {
+            winrt::TerminalApp::Tab tab{ nullptr };
             Microsoft::UI::Xaml::Controls::TreeViewNode node{ nullptr };
-            std::filesystem::path path;
-            bool isDirectory;
         };
         struct WorkspaceDocument
         {
@@ -309,6 +331,7 @@ namespace winrt::TerminalApp::implementation
             bool pinned{ false };
         };
         std::vector<WorkspaceSession> _workspaces;
+        std::vector<WorkspaceNavigationEntry> _workspaceNavigationEntries;
         std::vector<std::pair<winrt::TerminalApp::Tab, winrt::hstring>> _tabWorkspaces;
         std::vector<WorkspaceFileEntry> _workspaceFileEntries;
         std::vector<std::filesystem::path> _workspaceSearchResults;
@@ -316,6 +339,7 @@ namespace winrt::TerminalApp::implementation
         winrt::hstring _activeWorkspaceId;
         bool _changingWorkspace{ false };
         bool _updatingDocumentTabs{ false };
+        bool _restoringWorkspaceView{ false };
         uint64_t _workspaceSearchVersion{ 0 };
         uint64_t _workspaceDocumentVersion{ 0 };
         size_t _workspaceDocumentLineCount{ 0 };
@@ -338,6 +362,11 @@ namespace winrt::TerminalApp::implementation
         void _WorkspaceHubOpenClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceHubDeleteClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _UpdateWorkspaceTabVisibility();
+        void _RefreshWorkspaceNavigation();
+        void _SyncWorkspaceNavigationSelection();
+        void _WorkspaceNavigationInvoked(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewItemInvokedEventArgs& args);
+        Windows::Foundation::IAsyncAction _CloseWorkspace(winrt::hstring id);
+        void _SaveWorkspaceViewState();
         void _UpdateWorkspaceFilesUI();
         void _RefreshWorkspaceFiles();
         void _PopulateWorkspaceFileNode(const Microsoft::UI::Xaml::Controls::TreeViewNode& node);
@@ -619,8 +648,6 @@ namespace winrt::TerminalApp::implementation
         void _ResizeSideTabColumn(double requestedWidth);
         void _SideTabLayoutSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
         void _SideTabDockClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _SideTabDockPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
-        void _SideTabDockPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _SideTabDividerDragStarted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragStartedEventArgs& args);
         void _SideTabDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
         void _SideTabDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);

@@ -233,6 +233,8 @@ namespace winrt::TerminalApp::implementation
                 _UpdatedSelectedTab(*newTabImpl);
             }
         }
+        _RefreshWorkspaceNavigation();
+        _SyncWorkspaceNavigationSelection();
     }
 
     // Method Description:
@@ -304,7 +306,7 @@ namespace winrt::TerminalApp::implementation
         if (_tabView)
         {
             // collapse/show the tabs themselves
-            _tabView.Visibility(isVisible ? Visibility::Visible : Visibility::Collapsed);
+            _tabView.Visibility(isVisible && !sideTabs ? Visibility::Visible : Visibility::Collapsed);
         }
         if (_tabRow)
         {
@@ -317,8 +319,9 @@ namespace winrt::TerminalApp::implementation
                 if (const auto dock = SideTabDock())
                 {
                     const auto wasVisible = dock.Visibility() == Visibility::Visible;
-                    const auto showDock = isVisible && WorkspaceHub().Visibility() != Visibility::Visible;
+                    const auto showDock = isVisible;
                     dock.Visibility(showDock ? Visibility::Visible : Visibility::Collapsed);
+                    WorkspaceHeader().Visibility(showDock ? Visibility::Visible : Visibility::Collapsed);
                     if (showDock && !wasVisible)
                     {
                         _ShowSideTabOverlay(true);
@@ -601,11 +604,13 @@ namespace winrt::TerminalApp::implementation
         _tabView.TabItems().RemoveAt(tabIndex);
         _UpdateTabIndices();
 
-        // The workspace page remains available after the last terminal closes.
+        // Workspaces outlive their terminals, including the final terminal in
+        // the window. Keep the file and document surfaces available.
         if (_tabs.Size() == 0)
         {
+            _tabView.SelectedItem(nullptr);
             _tabContent.Children().Clear();
-            _ShowWorkspaceHub();
+            _ShowWorkspaceContent();
         }
         else if (removedFromActiveWorkspace)
         {
@@ -636,7 +641,7 @@ namespace winrt::TerminalApp::implementation
             {
                 _tabView.SelectedItem(nullptr);
                 _tabContent.Children().Clear();
-                _ShowWorkspaceHub();
+                _ShowWorkspaceContent();
             }
         }
 
@@ -648,6 +653,9 @@ namespace winrt::TerminalApp::implementation
             _rearrangeFrom = std::nullopt;
             _rearrangeTo = std::nullopt;
         }
+        _RefreshWorkspaceNavigation();
+        _SyncWorkspaceNavigationSelection();
+        _UpdateWorkspaceDocumentLayout();
     }
 
     // Method Description:
@@ -733,7 +741,7 @@ namespace winrt::TerminalApp::implementation
         // to _GetFocusedTab will return the correct tab.
         _tabView.SelectedItem(tab.TabViewItem());
 
-        if (_startupState == StartupState::InStartup)
+        if (_startupState == StartupState::InStartup || _tabPosition == TabPosition::Left)
         {
             _UpdatedSelectedTab(tab);
         }
@@ -768,12 +776,15 @@ namespace winrt::TerminalApp::implementation
     // - the index of the currently focused tab if there is one, else nullopt
     std::optional<uint32_t> TerminalPage::_GetFocusedTabIndex() const noexcept
     {
-        // GH#1117: This is a workaround because _tabView.SelectedIndex()
-        //          sometimes return incorrect result after removing some tabs
-        uint32_t focusedIndex;
-        if (_tabView.TabItems().IndexOf(_tabView.SelectedItem(), focusedIndex))
+        // Match identity: collection callbacks can run between mutations of
+        // _tabs and TabItems, when their numeric indices temporarily differ.
+        const auto selected = _tabView.SelectedItem();
+        for (uint32_t i = 0; i < _tabs.Size(); ++i)
         {
-            return focusedIndex;
+            if (_tabs.GetAt(i).TabViewItem() == selected)
+            {
+                return i;
+            }
         }
         return std::nullopt;
     }
@@ -822,12 +833,12 @@ namespace winrt::TerminalApp::implementation
     //   so make sure to check the result!
     winrt::TerminalApp::Tab TerminalPage::_GetTabByTabViewItem(const IInspectable& tabViewItem) const noexcept
     {
-        uint32_t tabIndexFromControl{};
-        const auto items{ _tabView.TabItems() };
-        if (items.IndexOf(tabViewItem, tabIndexFromControl) && tabIndexFromControl < _tabs.Size())
+        for (const auto& tab : _tabs)
         {
-            // If IndexOf returns true, we've actually got an index
-            return _tabs.GetAt(tabIndexFromControl);
+            if (tab.TabViewItem() == tabViewItem)
+            {
+                return tab;
+            }
         }
         return nullptr;
     }
@@ -1212,7 +1223,10 @@ namespace winrt::TerminalApp::implementation
         if (auto workspace = _FindWorkspace(_WorkspaceForTab(tab)))
         {
             workspace->lastFocused = tab;
+            workspace->preferTerminalInCompactView = true;
         }
+        _UpdateWorkspaceDocumentLayout();
+        _SyncWorkspaceNavigationSelection();
         // Unfocus all the tabs.
         for (const auto& tab : _tabs)
         {
@@ -1350,6 +1364,8 @@ namespace winrt::TerminalApp::implementation
             _tabView.TabItems().RemoveAt(currentTabIndex);
             _tabView.TabItems().InsertAt(newTabIndex, tabViewItem);
             _tabView.SelectedItem(tabViewItem);
+            _RefreshWorkspaceNavigation();
+            _SyncWorkspaceNavigationSelection();
 
             if (auto autoPeer = Automation::Peers::FrameworkElementAutomationPeer::FromElement(*this))
             {

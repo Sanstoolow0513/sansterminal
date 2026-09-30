@@ -59,7 +59,26 @@
                   Visibility="Collapsed">
                 <Border x:Name="SideTabPanel"
                         HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch" />
+                        VerticalAlignment="Stretch">
+                    <mux:TreeView x:Name="WorkspaceNavigation"
+                                  CanDragItems="False"
+                                  CanReorderItems="False"
+                                  ItemInvoked="_WorkspaceNavigationInvoked"
+                                  KeyUp="_KeyDownHandler"
+                                  SelectionMode="Single">
+                        <mux:TreeView.ItemContainerStyle>
+                            <Style TargetType="mux:TreeViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </mux:TreeView.ItemContainerStyle>
+                        <mux:TreeView.ItemTemplate>
+                            <DataTemplate>
+                                <ContentControl HorizontalContentAlignment="Stretch"
+                                                Content="{Binding Content}" />
+                            </DataTemplate>
+                        </mux:TreeView.ItemTemplate>
+                    </mux:TreeView>
+                </Border>
             </Grid>
 
             <Grid x:Name="WorkspaceFilesPanel"
@@ -86,7 +105,15 @@
                                   SelectionMode="Single">
                         <mux:TreeView.ItemTemplate>
                             <DataTemplate>
-                                <ContentControl Content="{Binding Content}" />
+                                <StackPanel Orientation="Horizontal"
+                                            AutomationProperties.Name="{Binding Content[Name]}">
+                                    <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                              FontSize="14"
+                                              Glyph="{Binding Content[Glyph]}" />
+                                    <TextBlock Margin="6,0,0,0"
+                                               Text="{Binding Content[Name]}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
                             </DataTemplate>
                         </mux:TreeView.ItemTemplate>
                     </mux:TreeView>
@@ -231,7 +258,7 @@
             </Thumb>
         </Grid>
 
-        <!-- The workspace page is the welcome screen and the navigation surface. -->
+        <!-- The welcome page leaves the workspace navigation reachable. -->
         <Grid x:Name="WorkspaceHub"
               Grid.Row="2"
               Canvas.ZIndex="3"
@@ -276,51 +303,66 @@
             </ScrollViewer>
         </Grid>
 
-        <!--
-            The compact toggle remains available above the sidebar, even when
-            its layout column is collapsed. While the sidebar is open it sits
-            flat in the sidebar's toolbar row; the card only shows while it
-            floats over the terminal.
-        -->
-        <Grid x:Name="SideTabDock"
-              Grid.Row="2"
-              Width="40"
-              Height="40"
-              Margin="8,6,0,0"
-              HorizontalAlignment="Left"
-              VerticalAlignment="Top"
-              PointerEntered="_SideTabDockPointerEntered"
-              PointerExited="_SideTabDockPointerExited"
-              Visibility="Collapsed">
-            <Border x:Name="SideTabDockCard"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8"
-                    Translation="0,0,16">
-                <Border.Shadow>
-                    <ThemeShadow />
-                </Border.Shadow>
-            </Border>
-            <Button x:Name="SideTabDockButton"
-                    MinWidth="0"
-                    MinHeight="0"
-                    Padding="0"
-                    HorizontalAlignment="Stretch"
-                    VerticalAlignment="Stretch"
-                    HorizontalContentAlignment="Center"
-                    VerticalContentAlignment="Center"
+        <!-- Global actions remain available when the sidebar is collapsed. -->
+        <StackPanel x:Name="WorkspaceHeader"
+                    Grid.Row="0"
+                    Height="40"
+                    KeyUp="_KeyDownHandler"
+                    Orientation="Horizontal"
+                    Visibility="Collapsed">
+            <Grid x:Name="SideTabDock"
+                  Width="40"
+                  Height="40"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Top"
+                  Visibility="Collapsed">
+                <Button x:Name="SideTabDockButton"
+                        x:Uid="WorkspaceSidebarToggle"
+                        MinWidth="0"
+                        MinHeight="0"
+                        Padding="0"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        VerticalContentAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        CornerRadius="8"
+                        Click="_SideTabDockClick">
+                    <!--  E8A0/E89F are the OpenPane/ClosePane glyphs.  -->
+                    <FontIcon x:Name="SideTabDockIcon"
+                              FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                              FontSize="18"
+                              Glyph="&#xE8A0;" />
+                </Button>
+            </Grid>
+            <Button x:Name="WorkspaceHeaderHome"
+                    x:Uid="WorkspaceHomeButton"
+                    Width="40"
+                    Height="36"
                     Background="Transparent"
                     BorderThickness="0"
-                    CornerRadius="8"
-                    Click="_SideTabDockClick">
-                <!--  E8A0/E89F are the OpenPane/ClosePane glyphs.  -->
-                <FontIcon x:Name="SideTabDockIcon"
-                          FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                          FontSize="18"
-                          Glyph="&#xE8A0;" />
+                    Click="_WorkspaceHomeClick">
+                <FontIcon FontSize="14"
+                          Glyph="&#xE80F;" />
             </Button>
-        </Grid>
+            <Button x:Uid="WorkspaceOpenFolderButton"
+                    Width="40"
+                    Height="36"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Click="_WorkspaceHubFolderClick">
+                <FontIcon FontSize="14"
+                          Glyph="&#xE8B7;" />
+            </Button>
+            <ContentPresenter x:Name="WorkspaceNewTabHost"
+                              VerticalAlignment="Center" />
+            <TextBlock x:Name="WorkspaceHeaderName"
+                       MaxWidth="200"
+                       Margin="12,0"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+        </StackPanel>
 
         <!--
             GH#12775 et. al: After switching to ControlsV2, it seems that

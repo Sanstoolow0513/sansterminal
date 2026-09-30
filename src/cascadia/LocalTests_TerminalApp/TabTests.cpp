@@ -12,6 +12,7 @@
 #include "../TerminalApp/CommandPalette.h"
 #include "../TerminalApp/ContentManager.h"
 #include "CppWinrtTailored.h"
+#include <fstream>
 
 using namespace Microsoft::Console;
 using namespace TerminalApp;
@@ -39,6 +40,20 @@ namespace winrt
 
 namespace TerminalAppLocalTests
 {
+    struct WorkspaceDialogPresenter : winrt::implements<WorkspaceDialogPresenter, winrt::TerminalApp::IDialogPresenter>
+    {
+        ContentDialogResult result{ ContentDialogResult::None };
+        uint32_t calls{ 0 };
+
+        winrt::Windows::Foundation::IAsyncOperation<ContentDialogResult> ShowDialog(const ContentDialog& dialog)
+        {
+            ++calls;
+            VERIFY_ARE_EQUAL(ContentDialogButton::Close, dialog.DefaultButton());
+            VERIFY_IS_FALSE(winrt::unbox_value<winrt::hstring>(dialog.Content()).empty());
+            co_return result;
+        }
+    };
+
     // TODO:microsoft/terminal#3838:
     // Unfortunately, these tests _WILL NOT_ work in our CI. We're waiting for
     // an updated TAEF that will let us install framework packages when the test
@@ -75,6 +90,8 @@ namespace TerminalAppLocalTests
         TEST_METHOD(CreateTerminalMuxXamlType);
         TEST_METHOD(VerticalTabViewLayout);
         TEST_METHOD(SideTabsPageLayout);
+        TEST_METHOD(WorkspaceNavigationLifecycle);
+        TEST_METHOD(WorkspaceExplorerContext);
 
         TEST_METHOD(CreateTerminalPage);
 
@@ -201,8 +218,6 @@ namespace TerminalAppLocalTests
         VERIFY_IS_TRUE(loaded.IsValid());
 
         TestOnUIThread([&]() {
-            // Match the application's WinUI resources, including DefaultTabViewStyle.
-            Application::Current().Resources().MergedDictionaries().Append(winrt::MUX::Controls::XamlControlsResources{});
             row = winrt::TerminalApp::TabRowControl{};
             Log::Comment(L"Load the vertical tab resources");
             row.SetVertical(true);
@@ -306,7 +321,6 @@ namespace TerminalAppLocalTests
 
             Window::Current().Content(nullptr);
             row = nullptr;
-            Application::Current().Resources().MergedDictionaries().RemoveAtEnd();
         });
     }
 
@@ -504,140 +518,262 @@ namespace TerminalAppLocalTests
         _initializeTerminalPage(page, settings);
 
         TestOnUIThread([&]() {
+            // The UWP test host has no native titlebar. Verify detachment,
+            // then host the same header in the page for layout assertions.
+            if (showTabsInTitlebar)
+            {
+                VERIFY_IS_NULL(page->WorkspaceHeader().Parent());
+                page->Root().Children().Append(page->WorkspaceHeader());
+            }
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
-            VERIFY_ARE_EQUAL(winrt::MUX::Controls::TabViewWidthMode::SizeToContent, page->_tabView.TabWidthMode());
-
-            // The sidebar starts open and occupies its own layout column.
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->_tabRow.Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceNavigation().Visibility());
             VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
             VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDivider().Visibility());
-            VERIFY_ARE_EQUAL(L"\xE89F", page->SideTabDockIcon().Glyph());
-            VERIFY_ARE_EQUAL(40.0, page->SideTabDock().ActualWidth());
-            VERIFY_ARE_EQUAL(40.0, page->SideTabDock().ActualHeight());
-            VERIFY_IS_TRUE(page->SideTabDockButton().ActualWidth() >= 36.0);
-            VERIFY_IS_TRUE(page->SideTabDockButton().ActualHeight() >= 36.0);
-            VERIFY_ARE_EQUAL(1u, page->_tabContent.Children().Size());
-            VERIFY_ARE_EQUAL(0, Grid::GetColumn(page->_tabContent));
-            VERIFY_IS_TRUE(page->_tabContent.ActualHeight() > 0.0);
             VERIFY_ARE_EQUAL(200.0, page->SideTabColumn().ActualWidth());
-            VERIFY_IS_TRUE(page->_tabContent.ActualWidth() < page->ActualWidth());
-            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 200.0 - page->ActualWidth()) < 1.0);
-            VERIFY_ARE_EQUAL(page->ActualHeight(), page->_tabContent.ActualHeight());
+            VERIFY_ARE_EQUAL(1u, page->_tabContent.Children().Size());
+            VERIFY_ARE_EQUAL(1u, page->WorkspaceNavigation().RootNodes().Size());
+            VERIFY_ARE_EQUAL(1u, page->WorkspaceNavigation().RootNodes().GetAt(0).Children().Size());
 
-            // The sidebar meets the terminal without a gap. The resize handle
-            // is an invisible strip over the terminal's leading edge.
-            const auto dividerPosition = page->SideTabDivider().TransformToVisual(page->SideTabLayout()).TransformPoint({});
-            VERIFY_ARE_EQUAL(200.0, dividerPosition.X);
-            VERIFY_ARE_EQUAL(6.0, page->SideTabDivider().ActualWidth());
+            const auto header = page->WorkspaceHeader();
+            const auto dockPosition = page->SideTabDock().TransformToVisual(header).TransformPoint({});
+            const auto newTabPosition = page->_newTabButton.TransformToVisual(header).TransformPoint({});
+            const auto homePosition = page->_workspaceHomeButton.TransformToVisual(header).TransformPoint({});
+            VERIFY_IS_TRUE(newTabPosition.X > homePosition.X);
+            VERIFY_IS_TRUE(homePosition.X >= dockPosition.X + 40.0);
+            VERIFY_IS_TRUE(std::abs(dockPosition.Y + 20 - newTabPosition.Y - page->_newTabButton.ActualHeight() / 2) < 2);
+            VERIFY_ARE_EQUAL(40.0, header.ActualHeight());
 
-            // The open sidebar's toggle sits flat in its toolbar.
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDockCard().Visibility());
-
-            // Notifications consume their own row below the host titlebar,
-            // keeping the sidebar and terminal clear of visible messages.
+            const auto contentHeight = page->_tabContent.ActualHeight();
             TextBlock notification{};
-            notification.Text(L"Layout test notification");
-            notification.Height(40.0);
+            notification.Height(40);
             page->InfoBarContainer().Children().Append(notification);
             page->UpdateLayout();
-            const auto notificationPosition = notification.TransformToVisual(page->Root()).TransformPoint({});
-            const auto contentPosition = page->SideTabLayout().TransformToVisual(page->Root()).TransformPoint({});
-            const auto notifiedDockPosition = page->SideTabDock().TransformToVisual(page->Root()).TransformPoint({});
-            VERIFY_IS_TRUE(contentPosition.Y >= notificationPosition.Y + notification.ActualHeight());
-            VERIFY_IS_TRUE(notifiedDockPosition.Y >= notificationPosition.Y + notification.ActualHeight());
-            VERIFY_IS_TRUE(page->_tabContent.ActualHeight() <= page->ActualHeight() - notification.ActualHeight());
-            page->InfoBarContainer().Children().RemoveAtEnd();
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(page->ActualHeight(), page->_tabContent.ActualHeight());
+            VERIFY_ARE_EQUAL(contentHeight - 40, page->_tabContent.ActualHeight());
+            page->InfoBarContainer().Children().Clear();
 
-            // The native Thumb's drag events change the layout widths.
-            // Collapsing returns the terminal to full width; reopening retains the size.
-            page->_SideTabDividerDragStarted(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragStartedEventArgs{ 0.0, 0.0 });
-            page->_SideTabDividerDragDelta(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs{ -20.0, 0.0 });
+            page->_SideTabDividerDragStarted(nullptr, winrt::WUX::Controls::Primitives::DragStartedEventArgs{ 0, 0 });
+            page->_SideTabDividerDragDelta(nullptr, winrt::WUX::Controls::Primitives::DragDeltaEventArgs{ 60, 0 });
+            page->_SideTabDividerDragCompleted(nullptr, winrt::WUX::Controls::Primitives::DragCompletedEventArgs{ 60, 0, false });
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(180.0, page->SideTabColumn().ActualWidth());
-            VERIFY_IS_TRUE(std::abs(page->_tabContent.ActualWidth() + 180.0 - page->ActualWidth()) < 1.0);
-            page->_SideTabDividerDragCompleted(nullptr, winrt::Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs{ -20.0, 0.0, false });
+            VERIFY_ARE_EQUAL(260.0, page->SideTabColumn().ActualWidth());
             page->_ShowSideTabOverlay(false);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabOverlay().Visibility());
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDivider().Visibility());
             VERIFY_ARE_EQUAL(0.0, page->SideTabColumn().ActualWidth());
-            VERIFY_ARE_EQUAL(page->ActualWidth(), page->_tabContent.ActualWidth());
+            VERIFY_ARE_EQUAL(Visibility::Visible, header.Visibility());
             VERIFY_ARE_EQUAL(L"\xE8A0", page->SideTabDockIcon().Glyph());
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDockCard().Visibility());
             page->_ShowSideTabOverlay(true);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
-            VERIFY_ARE_EQUAL(L"\xE89F", page->SideTabDockIcon().Glyph());
-            VERIFY_ARE_EQUAL(180.0, page->SideTabPanel().ActualWidth());
-            VERIFY_IS_TRUE(page->_tabRow.ActualWidth() > 150.0);
+            VERIFY_ARE_EQUAL(260.0, page->SideTabColumn().ActualWidth());
+            VERIFY_ARE_EQUAL(contentHeight, page->_tabContent.ActualHeight());
 
-            // The toggle shares the sidebar toolbar row with the new tab
-            // button; the workspace home button sits below both.
-            const auto dockPosition = page->SideTabDock().TransformToVisual(page->Root()).TransformPoint({});
-            const auto newTabPosition = page->_newTabButton.TransformToVisual(page->Root()).TransformPoint({});
-            const auto workspaceHomePosition = page->_workspaceHomeButton.TransformToVisual(page->Root()).TransformPoint({});
-            const auto dockCenter = dockPosition.Y + page->SideTabDock().ActualHeight() / 2;
-            const auto newTabCenter = newTabPosition.Y + page->_newTabButton.ActualHeight() / 2;
-            VERIFY_IS_TRUE(std::abs(dockCenter - newTabCenter) < 2.0);
-            VERIFY_IS_TRUE(newTabPosition.X > dockPosition.X + page->SideTabDock().ActualWidth());
-            VERIFY_IS_TRUE(dockPosition.Y + page->SideTabDock().ActualHeight() <= workspaceHomePosition.Y);
-
-            // Selecting a tab must leave the docked sidebar in place.
-            page->_tabView.SelectedIndex(-1);
-            page->_tabView.SelectedIndex(0);
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
-
-            // Focus mode hides the dock and force-closes the card.
+            page->_ShowWorkspaceHub();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabLayout().Visibility());
+            VERIFY_ARE_EQUAL(260.0, page->WorkspaceHub().Margin().Left);
+            page->_ShowWorkspaceContent();
             page->SetFocusMode(true);
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, header.Visibility());
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabOverlay().Visibility());
             page->SetFocusMode(false);
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
-
+            VERIFY_ARE_EQUAL(Visibility::Visible, header.Visibility());
             page->SetFullscreen(true);
             page->SetShowTabsFullscreen(false);
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, header.Visibility());
             page->SetShowTabsFullscreen(true);
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, header.Visibility());
             page->SetFullscreen(false);
+        });
+    }
 
-            // Workspace navigation keeps the sidebar reachable with one tab.
-            settings.WindowSettings(L"").AlwaysShowTabs(false);
-            page->_UpdateTabView();
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
+    void TabTests::WorkspaceNavigationLifecycle()
+    {
+        CascadiaSettings settings{ LR"({
+            "tabPosition": "left", "showTabsInTitlebar": false,
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{ "name": "Workspace test", "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}", "closeOnExit": "never" }]
+        })",
+                                   {} };
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+        TestOnUIThread([&]() {
+            const auto firstWorkspace = page->_activeWorkspaceId;
+            const auto firstTab = page->_tabs.GetAt(0);
+            const auto firstContent = firstTab.Content();
+            const auto firstConnection = page->_GetTabImpl(firstTab)->GetActiveTerminalControl().Connection();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            page->_SwitchWorkspace(L"navigation-test-B");
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            page->_SwitchWorkspace(L"navigation-test-C");
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            VERIFY_ARE_EQUAL(6u, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(3u, page->WorkspaceNavigation().RootNodes().Size());
+            for (const auto& node : page->WorkspaceNavigation().RootNodes())
+            {
+                VERIFY_ARE_EQUAL(2u, node.Children().Size());
+                VERIFY_IS_TRUE(node.IsExpanded());
+            }
+            uint32_t index{};
+            VERIFY_IS_TRUE(page->_tabs.IndexOf(firstTab, index));
+            page->_SelectTab(index);
+            VERIFY_ARE_EQUAL(firstWorkspace, page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(firstTab.Content() == firstContent);
+            VERIFY_IS_TRUE(page->_GetTabImpl(firstTab)->GetActiveTerminalControl().Connection() == firstConnection);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == firstTab);
+            VERIFY_ARE_EQUAL(6u, page->_tabs.Size());
+            // The single global add command targets the activated workspace.
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            VERIFY_ARE_EQUAL(firstWorkspace, page->_WorkspaceForTab(page->_GetFocusedTab()));
+            VERIFY_ARE_EQUAL(3u, page->_FindWorkspace(firstWorkspace)->navigationNode.Children().Size());
+            page->_SwitchWorkspace(L"navigation-test-B", false);
+            std::vector<winrt::TerminalApp::Tab> toClose;
+            for (const auto& tab : page->_tabs)
+            {
+                if (page->_IsTabInActiveWorkspace(tab))
+                {
+                    toClose.push_back(tab);
+                }
+            }
+            for (const auto& tab : toClose)
+            {
+                tab.Close();
+            }
+            VERIFY_ARE_EQUAL(L"navigation-test-B", page->_activeWorkspaceId);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+            VERIFY_ARE_EQUAL(0u, page->_tabContent.Children().Size());
+            VERIFY_IS_NOT_NULL(page->_FindWorkspace(L"navigation-test-B"));
+            const auto count = page->_tabs.Size();
+            page->_OpenWorkspace(L"navigation-test-B");
+            VERIFY_ARE_EQUAL(count, page->_tabs.Size());
+            const auto close = page->_CloseWorkspace(L"navigation-test-B");
+            close.GetResults();
+            VERIFY_IS_NULL(page->_FindWorkspace(L"navigation-test-B"));
+            VERIFY_ARE_EQUAL(2u, page->WorkspaceNavigation().RootNodes().Size());
+            // Removing a recent entry must not terminate or forget live sessions.
+            Button remove{};
+            remove.Tag(winrt::box_value(winrt::hstring{ L"navigation-test-C" }));
+            page->_WorkspaceHubDeleteClick(remove, RoutedEventArgs{});
+            VERIFY_IS_NOT_NULL(page->_FindWorkspace(L"navigation-test-C"));
+            VERIFY_ARE_EQUAL(count, page->_tabs.Size());
 
-            // Without workspace navigation, a titlebar preference must not
-            // force a single side tab to stay visible.
-            page->_tabRow.ShowWorkspacesButton(false);
-            page->_UpdateTabView();
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabDock().Visibility());
-            page->_tabRow.ShowWorkspacesButton(true);
-            settings.WindowSettings(L"").AlwaysShowTabs(true);
+            // Cancellation preserves the background workspace and its sessions;
+            // confirmation closes only that workspace, leaving focus in A.
+            const auto presenter = winrt::make_self<WorkspaceDialogPresenter>();
+            page->_dialogPresenter = winrt::make_weak(presenter.as<winrt::TerminalApp::IDialogPresenter>());
+            const auto cancel = page->_CloseWorkspace(L"navigation-test-C");
+            cancel.GetResults();
+            VERIFY_ARE_EQUAL(1u, presenter->calls);
+            VERIFY_IS_NOT_NULL(page->_FindWorkspace(L"navigation-test-C"));
+            VERIFY_ARE_EQUAL(count, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(firstWorkspace, page->_activeWorkspaceId);
+            presenter->result = ContentDialogResult::Primary;
+            const auto confirm = page->_CloseWorkspace(L"navigation-test-C");
+            confirm.GetResults();
+            VERIFY_ARE_EQUAL(2u, presenter->calls);
+            VERIFY_IS_NULL(page->_FindWorkspace(L"navigation-test-C"));
+            VERIFY_ARE_EQUAL(count - 2, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(firstWorkspace, page->_activeWorkspaceId);
+            const std::vector<winrt::TerminalApp::Tab> remaining{ page->_tabs.begin(), page->_tabs.end() };
+            for (const auto& tab : remaining)
+            {
+                tab.Close();
+            }
+            VERIFY_ARE_EQUAL(0u, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+            VERIFY_IS_NOT_NULL(page->_FindWorkspace(page->_activeWorkspaceId));
+            const auto closeLastWorkspace = page->_CloseWorkspace(firstWorkspace);
+            closeLastWorkspace.GetResults();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceHub().Visibility());
+            VERIFY_ARE_EQUAL(0u, page->WorkspaceNavigation().RootNodes().Size());
+        });
+    }
 
-            // Changing the preference affects future windows, not this page's layout.
-            settings.WindowSettings(L"").TabPosition(TabPosition::Top);
-            page->SetSettings(settings, true);
+    void TabTests::WorkspaceExplorerContext()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto root = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / winrt::to_hstring(unique).c_str();
+            const auto cleanup = wil::scope_exit([&]() noexcept {
+                std::error_code error;
+                std::filesystem::remove_all(root, error);
+            });
+            std::filesystem::create_directories(root / L"nested");
+            const auto file = root / L"nested" / L"context.txt";
+            std::ofstream{ file } << "original preview\nsecond line";
+            const winrt::hstring workspaceId{ root.native() };
+            page->_SwitchWorkspace(workspaceId);
+            const auto treeRoot = page->WorkspaceFileTree().RootNodes().GetAt(0);
+            const auto directory = treeRoot.Children().GetAt(0);
+            page->_PopulateWorkspaceFileNode(directory);
+            directory.IsExpanded(true);
+            const auto fileNode = directory.Children().GetAt(0);
+            page->WorkspaceFileTree().SelectedNode(fileNode);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabDock().Visibility());
-            VERIFY_ARE_EQUAL(winrt::MUX::Controls::TabViewWidthMode::SizeToContent, page->_tabView.TabWidthMode());
-
-            NewTerminalArgs newTerminalArgs{};
-            VERIFY_SUCCEEDED(page->_OpenNewTab(newTerminalArgs));
+            const auto container = page->WorkspaceFileTree().ContainerFromNode(fileNode);
+            VERIFY_IS_NOT_NULL(container);
+            const auto hasFileLabel = [&](const auto& self, const DependencyObject& element) -> bool {
+                if (const auto text = element.try_as<TextBlock>(); text && text.Text() == L"context.txt")
+                {
+                    return true;
+                }
+                using winrt::Windows::UI::Xaml::Media::VisualTreeHelper;
+                for (int32_t i = 0; i < VisualTreeHelper::GetChildrenCount(element); ++i)
+                {
+                    if (self(self, VisualTreeHelper::GetChild(element, i)))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            VERIFY_IS_TRUE(hasFileLabel(hasFileLabel, container));
+            page->_OpenWorkspaceDocument(file, true);
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+            page->WorkspaceDocumentEditor().Document().Selection().SetRange(3, 8);
+            page->WorkspaceFileSearchBox().Text(L"context");
+            page->_SwitchWorkspace(L"context-test-other", false);
+            std::ofstream{ file } << "externally changed";
+            page->_SwitchWorkspace(workspaceId, false);
+            VERIFY_IS_TRUE(page->WorkspaceFileTree().RootNodes().GetAt(0) == treeRoot);
+            VERIFY_IS_TRUE(directory.IsExpanded());
+            VERIFY_IS_TRUE(page->WorkspaceFileTree().SelectedNode() == fileNode);
+            VERIFY_ARE_EQUAL(L"context", page->WorkspaceFileSearchBox().Text());
+            winrt::hstring text;
+            page->WorkspaceDocumentEditor().Document().GetText(TextGetOptions::None, text);
+            VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"original preview"));
+            VERIFY_ARE_EQUAL(3, page->WorkspaceDocumentEditor().Document().Selection().StartPosition());
+            VERIFY_ARE_EQUAL(8, page->WorkspaceDocumentEditor().Document().Selection().EndPosition());
+            page->WorkspaceFileSearchBox().Text(L"");
+            VERIFY_IS_TRUE(page->WorkspaceFileTree().RootNodes().GetAt(0) == treeRoot);
+            VERIFY_IS_TRUE(directory.IsExpanded());
+            for (auto i = 0; i < 5; ++i)
+            {
+                page->_SwitchWorkspace(L"context-test-other", false);
+                page->UpdateLayout();
+                page->_SwitchWorkspace(workspaceId, false);
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->WorkspaceFileTree().RootNodes().GetAt(0) == treeRoot);
+                VERIFY_IS_TRUE(directory.IsExpanded());
+                VERIFY_IS_TRUE(page->WorkspaceFileTree().SelectedNode() == fileNode);
+            }
+            // In a narrow window, explicit terminal navigation must reveal the
+            // terminal instead of leaving the document covering its content.
+            page->WorkspaceContentArea().Width(480);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabOverlay().Visibility());
-            VERIFY_ARE_EQUAL(1u, page->_tabContent.Children().Size());
+            page->_OpenWorkspaceDocument(file, true);
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            const auto terminalIndex = page->_GetFocusedTabIndex().value();
+            page->_SelectTab(0);
+            page->_SelectTab(terminalIndex);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(GridUnitType::Star, page->WorkspaceTerminalColumn().Width().GridUnitType);
+            page->_GetFocusedTab().Close();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceFilesPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+            page->WorkspaceContentArea().Width(NAN);
         });
     }
 
