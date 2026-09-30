@@ -1159,4 +1159,10 @@
   <data name="WorkspaceOpenFolderButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>打开文件夹</value>
   </data>
+  <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>切换工作区</value>
+  </data>
+  <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>切换工作区</value>
+  </data>
 </root>

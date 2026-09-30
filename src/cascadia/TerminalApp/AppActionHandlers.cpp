@@ -787,16 +787,22 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            // Since _RemoveTabs is asynchronous, create a snapshot of the  tabs we want to remove
-            std::vector<winrt::TerminalApp::Tab> tabsToRemove;
-            if (index > 0)
+            if (index >= _tabs.Size())
             {
-                std::copy(begin(_tabs), begin(_tabs) + index, std::back_inserter(tabsToRemove));
+                actionArgs.Handled(false);
+                return;
             }
 
-            if (index + 1 < _tabs.Size())
+            // Snapshot only the target tab's workspace before asynchronous removal.
+            const auto target = _tabs.GetAt(index);
+            const auto workspaceId = _WorkspaceForTab(target);
+            std::vector<winrt::TerminalApp::Tab> tabsToRemove;
+            for (const auto& tab : _tabs)
             {
-                std::copy(begin(_tabs) + index + 1, end(_tabs), std::back_inserter(tabsToRemove));
+                if (tab != target && _WorkspaceForTab(tab) == workspaceId)
+                {
+                    tabsToRemove.push_back(tab);
+                }
             }
 
             _RemoveTabs(tabsToRemove);
@@ -826,9 +832,23 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            // Since _RemoveTabs is asynchronous, create a snapshot of the  tabs we want to remove
+            if (index >= _tabs.Size())
+            {
+                actionArgs.Handled(false);
+                return;
+            }
+
+            // Global tab order can interleave several workspaces.
+            const auto workspaceId = _WorkspaceForTab(_tabs.GetAt(index));
             std::vector<winrt::TerminalApp::Tab> tabsToRemove;
-            std::copy(begin(_tabs) + index + 1, end(_tabs), std::back_inserter(tabsToRemove));
+            for (auto i = index + 1; i < _tabs.Size(); ++i)
+            {
+                const auto tab = _tabs.GetAt(i);
+                if (_WorkspaceForTab(tab) == workspaceId)
+                {
+                    tabsToRemove.push_back(tab);
+                }
+            }
             _RemoveTabs(tabsToRemove);
 
             // TODO:GH#7182 For whatever reason, if you run this action

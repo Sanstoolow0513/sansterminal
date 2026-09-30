@@ -1162,4 +1162,10 @@ For all available options, run 'wt new-tab --help'.</value>
   <data name="WorkspaceOpenFolderButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>Open folder</value>
   </data>
+  <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>Switch workspace</value>
+  </data>
+  <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>Switch workspace</value>
+  </data>
 </root>

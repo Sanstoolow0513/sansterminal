@@ -279,6 +279,18 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
 
         MTSM_APPLICATION_STATE_FIELDS(MTSM_APPLICATION_STATE_GEN)
 #undef MTSM_APPLICATION_STATE_GEN
+
+        // Older state files only have saved workspaces. An explicit recent
+        // list (including an empty one) records the user's later removals.
+        if (WI_IsFlagSet(parseSource, FileSource::Local) && !root.isMember("recentWorkspaces") &&
+            state->PersistedWorkspaces && *state->PersistedWorkspaces)
+        {
+            auto& recent = state->RecentWorkspaces.emplace();
+            for (const auto& workspace : *state->PersistedWorkspaces)
+            {
+                recent.push_back(workspace.Key());
+            }
+        }
     }
 
     Json::Value ApplicationState::ToJson(FileSource parseSource) const noexcept

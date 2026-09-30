@@ -11,8 +11,11 @@
 #include "../TerminalApp/Tab.h"
 #include "../TerminalApp/CommandPalette.h"
 #include "../TerminalApp/ContentManager.h"
+#include "../TerminalApp/TerminalSettingsCache.h"
 #include "CppWinrtTailored.h"
 #include <fstream>
+#include <winrt/Windows.UI.Xaml.Automation.Peers.h>
+#include <winrt/Windows.UI.Xaml.Automation.Provider.h>
 
 using namespace Microsoft::Console;
 using namespace TerminalApp;
@@ -92,6 +95,10 @@ namespace TerminalAppLocalTests
         TEST_METHOD(SideTabsPageLayout);
         TEST_METHOD(WorkspaceNavigationLifecycle);
         TEST_METHOD(WorkspaceExplorerContext);
+        TEST_METHOD(EmptyWorkspaceWindowClose);
+        TEST_METHOD(WorkspaceBulkClose);
+        TEST_METHOD(WorkspaceLaunchArguments);
+        TEST_METHOD(TopTabWorkspaceNavigation);
 
         TEST_METHOD(CreateTerminalPage);
 
@@ -568,6 +575,29 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(260.0, page->SideTabColumn().ActualWidth());
             VERIFY_ARE_EQUAL(contentHeight, page->_tabContent.ActualHeight());
 
+            // The file explorer introduces a second boundary. Both handles
+            // must remain at their own panel edges and resize independently.
+            const auto workspace = page->_FindWorkspace(page->_activeWorkspaceId);
+            workspace->root = winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str();
+            workspace->currentDirectory = workspace->root;
+            page->_UpdateWorkspaceFilesUI();
+            page->UpdateLayout();
+            const auto layout = page->SideTabLayout();
+            VERIFY_ARE_EQUAL(260.0f, page->SideTabDivider().TransformToVisual(layout).TransformPoint({}).X);
+            const auto filesWidth = page->WorkspaceFilesColumn().ActualWidth();
+            VERIFY_IS_TRUE(filesWidth > 0);
+            VERIFY_ARE_EQUAL(static_cast<float>(260.0 + filesWidth), page->WorkspaceFilesDivider().TransformToVisual(layout).TransformPoint({}).X);
+            page->_SideTabDividerDragStarted(nullptr, winrt::WUX::Controls::Primitives::DragStartedEventArgs{ 0, 0 });
+            page->_SideTabDividerDragDelta(nullptr, winrt::WUX::Controls::Primitives::DragDeltaEventArgs{ -20, 0 });
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(240.0, page->SideTabColumn().ActualWidth());
+            VERIFY_ARE_EQUAL(filesWidth, page->WorkspaceFilesColumn().ActualWidth());
+            page->_WorkspaceFilesDividerDragDelta(nullptr, winrt::WUX::Controls::Primitives::DragDeltaEventArgs{ -20, 0 });
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(240.0, page->SideTabColumn().ActualWidth());
+            VERIFY_ARE_EQUAL(filesWidth - 20, page->WorkspaceFilesColumn().ActualWidth());
+            page->_ResizeSideTabColumn(260);
+
             page->_ShowWorkspaceHub();
             VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabLayout().Visibility());
             VERIFY_ARE_EQUAL(260.0, page->WorkspaceHub().Margin().Left);
@@ -685,6 +715,157 @@ namespace TerminalAppLocalTests
             closeLastWorkspace.GetResults();
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceHub().Visibility());
             VERIFY_ARE_EQUAL(0u, page->WorkspaceNavigation().RootNodes().Size());
+        });
+    }
+
+    void TabTests::EmptyWorkspaceWindowClose()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Automatic);
+            page->_tabs.GetAt(0).Close();
+            VERIFY_ARE_EQUAL(0u, page->_tabs.Size());
+            VERIFY_IS_FALSE(page->_ShouldWarnOnClose());
+            uint32_t closeRequests{};
+            const auto token = page->CloseWindowRequested([&](auto&&, auto&&) { ++closeRequests; });
+            const auto cleanup = wil::scope_exit([&]() { page->CloseWindowRequested(token); });
+            page->CloseWindow();
+            VERIFY_ARE_EQUAL(1u, closeRequests);
+
+            const auto closeWorkspace = page->_CloseWorkspace(page->_activeWorkspaceId);
+            closeWorkspace.GetResults();
+            VERIFY_IS_TRUE(page->_workspaces.empty());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceHub().Visibility());
+            page->CloseWindow();
+            VERIFY_ARE_EQUAL(2u, closeRequests);
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Always);
+            VERIFY_IS_TRUE(page->_ShouldWarnOnClose());
+        });
+    }
+
+    void TabTests::WorkspaceBulkClose()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:closeOthers", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+
+        bool sideTabs;
+        bool closeOthers;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"closeOthers", closeOthers));
+        CascadiaSettings settings{ LR"({
+            "showTabsInTitlebar": false,
+            "newTabPosition": "afterLastTab",
+            "warning.confirmOnClose": "never",
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{ "name": "Bulk close test", "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}", "closeOnExit": "never" }]
+        })", {} };
+        settings.WindowSettings(L"").TabPosition(sideTabs ? TabPosition::Left : TabPosition::Top);
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+        TestOnUIThread([&]() {
+            const auto workspaceA = page->_activeWorkspaceId;
+            const auto first = page->_tabs.GetAt(0);
+            page->_SwitchWorkspace(L"bulk-close-B");
+            const auto background = page->_GetFocusedTab();
+            const auto connection = page->_GetFocusedTabImpl()->GetActiveTerminalControl().Connection();
+            page->_SwitchWorkspace(workspaceA, false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            const auto middle = page->_GetFocusedTab();
+            page->_SwitchWorkspace(L"bulk-close-B", false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            const auto otherBackground = page->_GetFocusedTab();
+            page->_SwitchWorkspace(workspaceA, false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{}));
+            // Keep B active while the explicitly indexed action targets A.
+            page->_SwitchWorkspace(L"bulk-close-B", false);
+            uint32_t index{};
+            const auto target = closeOthers ? middle : first;
+            VERIFY_IS_TRUE(page->_tabs.IndexOf(target, index));
+            if (closeOthers)
+            {
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::CloseOtherTabs, CloseOtherTabsArgs{ index } }));
+            }
+            else
+            {
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::CloseTabsAfter, CloseTabsAfterArgs{ index } }));
+            }
+            VERIFY_ARE_EQUAL(3u, page->_tabs.Size());
+            VERIFY_IS_TRUE(page->_tabs.IndexOf(target, index));
+            VERIFY_IS_TRUE(page->_tabs.IndexOf(background, index));
+            VERIFY_IS_TRUE(page->_tabs.IndexOf(otherBackground, index));
+            VERIFY_IS_TRUE(page->_GetTabImpl(background)->GetActiveTerminalControl().Connection() == connection);
+            VERIFY_ARE_EQUAL(L"bulk-close-B", page->_activeWorkspaceId);
+            VERIFY_IS_FALSE(page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::CloseOtherTabs, CloseOtherTabsArgs{ 99 } }));
+            VERIFY_IS_FALSE(page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::CloseTabsAfter, CloseTabsAfterArgs{ 99 } }));
+            VERIFY_ARE_EQUAL(3u, page->_tabs.Size());
+        });
+    }
+
+    void TabTests::WorkspaceLaunchArguments()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            // Tab initialization normally replaces the control's settings with
+            // cached profile settings after creating the connection. Keep this
+            // profile out of the reload cache so we can inspect its launch settings.
+            CascadiaSettings cacheSettings{ LR"({
+                "defaultProfile": "{6239a42c-4444-49a3-80bd-e8fdd045185c}",
+                "profiles": [{ "name": "Unused cache profile", "guid": "{6239a42c-4444-49a3-80bd-e8fdd045185c}" }]
+            })", {} };
+            page->_terminalSettingsCache->Reset(cacheSettings, cacheSettings.WindowSettings(L""));
+            const auto appData = winrt::Windows::Storage::ApplicationData::Current();
+            const auto folderA = appData.LocalFolder().Path();
+            const auto folderB = appData.TemporaryFolder().Path();
+            NewTerminalArgs args{};
+            const ActionAndArgs action{ ShortcutAction::NewTab, NewTabArgs{ args } };
+            for (const auto& folder : { folderA, folderB })
+            {
+                page->_SwitchWorkspace(folder, false);
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(action));
+                VERIFY_IS_TRUE(args.StartingDirectory().empty());
+                VERIFY_ARE_EQUAL(folder, page->_GetFocusedTabImpl()->GetActiveTerminalControl().Settings().StartingDirectory());
+            }
+            // Explicit directories still override the workspace, including reused actions.
+            args.StartingDirectory(folderA);
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction(action));
+            VERIFY_ARE_EQUAL(folderA, page->_GetFocusedTabImpl()->GetActiveTerminalControl().Settings().StartingDirectory());
+            VERIFY_ARE_EQUAL(folderA, args.StartingDirectory());
+            // The default new-tab path has no content arguments.
+            VERIFY_SUCCEEDED(page->_OpenNewTab(nullptr));
+            VERIFY_ARE_EQUAL(folderB, page->_GetFocusedTabImpl()->GetActiveTerminalControl().Settings().StartingDirectory());
+        });
+    }
+
+    void TabTests::TopTabWorkspaceNavigation()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(TabPosition::Top, page->_tabPosition);
+            const auto untitled = page->_activeWorkspaceId;
+            const auto terminal = page->_GetFocusedTab();
+            const auto connection = page->_GetFocusedTabImpl()->GetActiveTerminalControl().Connection();
+            page->_SwitchWorkspace(L"top-navigation-B");
+            ApplicationState::SharedInstance().ForgetRecentWorkspace(L"top-navigation-B");
+            page->_ShowWorkspaceHub();
+            const auto row = winrt::get_self<winrt::TerminalApp::implementation::TabRowControl>(page->_tabRow);
+            VERIFY_ARE_EQUAL(Visibility::Visible, row->WorkspaceSwitcher().Visibility());
+            VERIFY_ARE_EQUAL(2u, row->WorkspaceSwitcherFlyout().Items().Size());
+            const auto activate = [&](uint32_t index) {
+                const auto item = row->WorkspaceSwitcherFlyout().Items().GetAt(index).as<MenuFlyoutItem>();
+                const Automation::Peers::MenuFlyoutItemAutomationPeer peer{ item };
+                peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+            };
+            activate(0);
+            VERIFY_ARE_EQUAL(untitled, page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == terminal);
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl()->GetActiveTerminalControl().Connection() == connection);
+            VERIFY_ARE_EQUAL(Visibility::Visible, terminal.TabViewItem().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+            activate(1);
+            VERIFY_ARE_EQUAL(L"top-navigation-B", page->_activeWorkspaceId);
+            VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
         });
     }
 

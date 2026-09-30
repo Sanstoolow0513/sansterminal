@@ -30,6 +30,8 @@ namespace SettingsModelUnitTests
         TEST_METHOD(TakeWorkspaceRemovesAndReturns);
         TEST_METHOD(TakeWorkspaceReturnsNullWhenMissing);
         TEST_METHOD(RecentWorkspacesSurviveSerialization);
+        TEST_METHOD(LegacyWorkspacesBecomeRecent);
+        TEST_METHOD(ExplicitRecentWorkspacesAreNotRepopulated);
 
     private:
         static std::filesystem::path _tempRoot()
@@ -160,5 +162,53 @@ namespace SettingsModelUnitTests
         VERIFY_IS_TRUE(state->ForgetRecentWorkspace(L"first"));
         VERIFY_IS_FALSE(state->ForgetRecentWorkspace(L"first"));
         VERIFY_ARE_EQUAL(1u, state->AllRecentWorkspaces().Size());
+    }
+
+    void ApplicationStateTests::LegacyWorkspacesBecomeRecent()
+    {
+        auto state = _make();
+        state->SaveWorkspace(L"legacy", _makeLayout());
+        auto legacy = state->ToJson(implementation::FileSource::Local);
+        legacy.removeMember("recentWorkspaces");
+        state->FromJson(legacy, implementation::FileSource::Local);
+
+        auto recent = state->AllRecentWorkspaces();
+        VERIFY_ARE_EQUAL(1u, recent.Size());
+        VERIFY_IS_TRUE(recent.GetAt(0) == L"legacy");
+
+        // Recording a new workspace before the hub is shown must preserve the migration.
+        state->RecordRecentWorkspace(L"new");
+        recent = state->AllRecentWorkspaces();
+        VERIFY_ARE_EQUAL(2u, recent.Size());
+        VERIFY_IS_TRUE(recent.GetAt(0) == L"new");
+        VERIFY_IS_TRUE(recent.GetAt(1) == L"legacy");
+
+        VERIFY_IS_TRUE(state->ForgetRecentWorkspace(L"legacy"));
+        VERIFY_IS_TRUE(state->ForgetRecentWorkspace(L"new"));
+        const auto saved = state->ToJson(implementation::FileSource::Local);
+        VERIFY_IS_TRUE(saved["recentWorkspaces"].isArray());
+        state->FromJson(saved, implementation::FileSource::Local);
+        VERIFY_ARE_EQUAL(0u, state->AllRecentWorkspaces().Size());
+        VERIFY_IS_TRUE(state->AllPersistedWorkspaces().HasKey(L"legacy"));
+    }
+
+    void ApplicationStateTests::ExplicitRecentWorkspacesAreNotRepopulated()
+    {
+        auto state = _make();
+        state->SaveWorkspace(L"hidden", _makeLayout());
+        state->RecordRecentWorkspace(L"visible");
+        auto saved = state->ToJson(implementation::FileSource::Local);
+        state->FromJson(saved, implementation::FileSource::Local);
+        const auto recent = state->AllRecentWorkspaces();
+        VERIFY_ARE_EQUAL(1u, recent.Size());
+        VERIFY_IS_TRUE(recent.GetAt(0) == L"visible");
+
+        saved["recentWorkspaces"] = Json::Value{ Json::arrayValue };
+        state->FromJson(saved, implementation::FileSource::Local);
+        VERIFY_ARE_EQUAL(0u, state->AllRecentWorkspaces().Size());
+        // Reading shared state cannot reintroduce local workspace history.
+        saved.removeMember("recentWorkspaces");
+        state->FromJson(saved, implementation::FileSource::Shared);
+        VERIFY_ARE_EQUAL(0u, state->AllRecentWorkspaces().Size());
     }
 }

@@ -2525,7 +2525,7 @@ namespace winrt::TerminalApp::implementation
         case ConfirmOnClose::Automatic:
         {
             // Warn if there's more than one tab, or the one tab has more than one pane.
-            return _HasMultipleTabs() || _GetTabImpl(_tabs.GetAt(0))->GetLeafPaneCount() > 1;
+            return _HasMultipleTabs() || (_tabs.Size() == 1 && _GetTabImpl(_tabs.GetAt(0))->GetLeafPaneCount() > 1);
         }
         case ConfirmOnClose::Never:
         default:
@@ -5826,6 +5826,29 @@ namespace winrt::TerminalApp::implementation
     {
         if (_tabPosition != TabPosition::Left)
         {
+            // Live sessions are independent of recent history, which excludes
+            // untitled workspaces and can be edited without closing terminals.
+            const auto row = winrt::get_self<implementation::TabRowControl>(_tabRow);
+            const auto items = row->WorkspaceSwitcherFlyout().Items();
+            items.Clear();
+            for (const auto& workspace : _workspaces)
+            {
+                MenuFlyoutItem item{};
+                item.Text(workspace.displayName);
+                item.Tag(box_value(workspace.id));
+                if (workspace.id == _activeWorkspaceId)
+                {
+                    item.Icon(SymbolIcon{ Symbol::Accept });
+                }
+                item.Click([weakThis = get_weak(), id = workspace.id](auto&&, auto&&) {
+                    if (const auto page = weakThis.get())
+                    {
+                        page->_SwitchWorkspace(id, false);
+                    }
+                });
+                items.Append(item);
+            }
+            row->WorkspaceSwitcher().Visibility(_workspaces.empty() ? Visibility::Collapsed : Visibility::Visible);
             return;
         }
 

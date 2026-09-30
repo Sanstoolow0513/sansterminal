@@ -66,7 +66,10 @@ namespace winrt::TerminalApp::implementation
     try
     {
         _EnsureWorkspaceForTerminal();
-        if (const auto& newTerminalArgs{ newContentArgs.try_as<NewTerminalArgs>() })
+        // Actions can reuse their arguments across launches and workspaces.
+        // Apply workspace defaults only to this launch's copy.
+        const auto launchArgs = newContentArgs ? newContentArgs.Copy() : NewTerminalArgs{};
+        if (const auto& newTerminalArgs{ launchArgs.try_as<NewTerminalArgs>() })
         {
             if (newTerminalArgs.StartingDirectory().empty())
             {
@@ -96,7 +99,7 @@ namespace winrt::TerminalApp::implementation
 
         // This call to _MakePane won't return nullptr, we already checked that
         // case above with the _maybeElevate call.
-        _CreateNewTabFromPane(_MakePane(newContentArgs, nullptr));
+        _CreateNewTabFromPane(_MakePane(launchArgs, nullptr));
         return S_OK;
     }
     CATCH_RETURN();
