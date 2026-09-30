@@ -44,6 +44,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
     X(FileSource::Local, Windows::Foundation::Collections::IVector<hstring>, AllowedCommandlines, "allowedCommandlines")                                                  \
     X(FileSource::Local, std::unordered_set<hstring>, DismissedBadges, "dismissedBadges")                                                                                 \
     X(FileSource::Local, Windows::Foundation::Collections::IMap<hstring COMMA Model::WindowLayout>, PersistedWorkspaces, "persistedWorkspaces")                           \
+    X(FileSource::Local, std::vector<hstring>, RecentWorkspaces, "recentWorkspaces")                                                                                     \
     X(FileSource::Shared, bool, SSHFolderGenerated, "sshFolderGenerated", false)
 
     struct WindowLayout : WindowLayoutT<WindowLayout>
@@ -84,6 +85,9 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         bool RenameWorkspace(const hstring& oldName, const hstring& newName);
         Model::WindowLayout TakeWorkspace(const hstring& name);
         Windows::Foundation::Collections::IMapView<hstring, Model::WindowLayout> AllPersistedWorkspaces();
+        void RecordRecentWorkspace(const hstring& name);
+        bool ForgetRecentWorkspace(const hstring& name);
+        Windows::Foundation::Collections::IVectorView<hstring> AllRecentWorkspaces();
 
         // State getters/setters
 #define MTSM_APPLICATION_STATE_GEN(source, type, name, key, ...) \

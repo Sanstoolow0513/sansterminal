@@ -29,6 +29,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(RenameWorkspaceNoOpForMissingEntry);
         TEST_METHOD(TakeWorkspaceRemovesAndReturns);
         TEST_METHOD(TakeWorkspaceReturnsNullWhenMissing);
+        TEST_METHOD(RecentWorkspacesSurviveSerialization);
 
     private:
         static std::filesystem::path _tempRoot()
@@ -134,5 +135,30 @@ namespace SettingsModelUnitTests
     {
         auto state = _make();
         VERIFY_IS_NULL(state->TakeWorkspace(L"missing"));
+    }
+
+    void ApplicationStateTests::RecentWorkspacesSurviveSerialization()
+    {
+        auto state = _make();
+        state->RecordRecentWorkspace(L"first");
+        state->RecordRecentWorkspace(LR"(C:\Projects\sample)");
+        state->RecordRecentWorkspace(L"first");
+
+        auto recent = state->AllRecentWorkspaces();
+        VERIFY_ARE_EQUAL(2u, recent.Size());
+        VERIFY_IS_TRUE(recent.GetAt(0) == L"first");
+        VERIFY_IS_TRUE(recent.GetAt(1) == LR"(C:\Projects\sample)");
+
+        const auto saved = state->ToJson(implementation::FileSource::Local);
+        state->ForgetRecentWorkspace(L"first");
+        state->FromJson(saved, implementation::FileSource::Local);
+        recent = state->AllRecentWorkspaces();
+        VERIFY_ARE_EQUAL(2u, recent.Size());
+        VERIFY_IS_TRUE(recent.GetAt(0) == L"first");
+        VERIFY_IS_TRUE(recent.GetAt(1) == LR"(C:\Projects\sample)");
+
+        VERIFY_IS_TRUE(state->ForgetRecentWorkspace(L"first"));
+        VERIFY_IS_FALSE(state->ForgetRecentWorkspace(L"first"));
+        VERIFY_ARE_EQUAL(1u, state->AllRecentWorkspaces().Size());
     }
 }

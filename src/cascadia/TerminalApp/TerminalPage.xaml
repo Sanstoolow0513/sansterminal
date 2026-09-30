@@ -68,46 +68,15 @@
                   Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <StackPanel Grid.Row="0"
-                            Margin="12,12,8,4"
-                            Orientation="Horizontal">
-                    <TextBlock x:Uid="WorkspaceFilesHeader"
-                               FontWeight="SemiBold" />
-                    <Button x:Name="WorkspaceChangeFolderButton"
-                            x:Uid="WorkspaceChangeFolderButton"
-                            MinWidth="0"
-                            Margin="8,0,0,0"
-                            Padding="4,0"
-                            Click="_WorkspaceChangeFolderClick" />
-                </StackPanel>
-                <Grid Grid.Row="1"
-                      Margin="8,0,8,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="WorkspaceRefreshButton"
-                            x:Uid="WorkspaceRefreshButton"
-                            MinWidth="0"
-                            Padding="6,2"
-                            Click="_WorkspaceRefreshClick" />
-                    <TextBlock x:Name="WorkspacePathText"
-                               Grid.Column="1"
-                               Margin="8,0,0,0"
-                               VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis" />
-                </Grid>
                 <TextBox x:Name="WorkspaceFileSearchBox"
                          x:Uid="WorkspaceFileSearchBox"
-                         Grid.Row="2"
-                         Margin="8,4,8,4"
+                         Grid.Row="0"
+                         Margin="8,8,8,4"
                          TextChanged="_WorkspaceFileSearchChanged" />
-                <Grid Grid.Row="3">
+                <Grid Grid.Row="1">
                     <mux:TreeView x:Name="WorkspaceFileTree"
                                   CanDragItems="False"
                                   CanReorderItems="False"
@@ -127,7 +96,7 @@
                               Visibility="Collapsed" />
                 </Grid>
                 <TextBlock x:Name="WorkspaceFilesStatus"
-                           Grid.Row="4"
+                           Grid.Row="2"
                            Margin="12,4,8,8"
                            Opacity="0.65"
                            TextTrimming="CharacterEllipsis" />
@@ -158,32 +127,12 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <Grid Grid.Row="1">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <mux:TabView x:Name="WorkspaceDocumentTabs"
-                                     IsAddTabButtonVisible="False"
-                                     TabWidthMode="SizeToContent"
-                                     SelectionChanged="_WorkspaceDocumentSelectionChanged"
-                                     TabCloseRequested="_WorkspaceDocumentTabCloseRequested" />
-                        <Button x:Name="WorkspaceDocumentMaximizeButton"
-                                x:Uid="WorkspaceDocumentMaximizeButton"
-                                Grid.Column="1"
-                                MinWidth="0"
-                                Margin="4,0"
-                                Padding="8,2"
-                                Click="_WorkspaceDocumentMaximizeClick" />
-                        <Button x:Name="WorkspaceClosePreviewButton"
-                                x:Uid="WorkspaceClosePreviewButton"
-                                Grid.Column="2"
-                                MinWidth="0"
-                                Margin="0,0,8,0"
-                                Padding="8,2"
-                                Click="_WorkspaceClosePreviewClick" />
-                    </Grid>
+                    <mux:TabView x:Name="WorkspaceDocumentTabs"
+                                 Grid.Row="1"
+                                 IsAddTabButtonVisible="False"
+                                 TabWidthMode="SizeToContent"
+                                 SelectionChanged="_WorkspaceDocumentSelectionChanged"
+                                 TabCloseRequested="_WorkspaceDocumentTabCloseRequested" />
                     <RichEditBox x:Name="WorkspaceDocumentEditor"
                                  Grid.Row="2"
                                  Margin="8,0,8,4"
@@ -307,10 +256,6 @@
                                 x:Uid="WorkspaceHubFolderButton"
                                 Margin="10,0,0,0"
                                 Click="_WorkspaceHubFolderClick" />
-                        <Button x:Name="WorkspaceHubPathButton"
-                                x:Uid="WorkspaceHubPathButton"
-                                Margin="10,0,0,0"
-                                Click="_WorkspaceHubPathClick" />
                     </StackPanel>
                     <TextBlock x:Uid="WorkspaceHubListHeader"
                                Margin="0,36,0,12"
@@ -319,8 +264,7 @@
                     <ListView x:Name="WorkspaceHubList"
                               MinWidth="480"
                               MaxHeight="360"
-                              SelectionMode="Single"
-                              SelectionChanged="_WorkspaceHubSelectionChanged" />
+                              SelectionMode="None" />
                     <TextBlock x:Name="WorkspaceHubEmptyText"
                                x:Uid="WorkspaceHubEmptyText"
                                Margin="0,12,0,0"

@@ -296,7 +296,6 @@ namespace winrt::TerminalApp::implementation
             double explorerWidth{ 250.0 };
             double documentWidth{ 520.0 };
             bool documentVisible{ false };
-            bool documentMaximized{ false };
         };
         struct WorkspaceFileEntry
         {
@@ -311,17 +310,11 @@ namespace winrt::TerminalApp::implementation
             Microsoft::UI::Xaml::Controls::TabViewItem tab{ nullptr };
             bool pinned{ false };
         };
-        struct WorkspaceHubEntry
-        {
-            winrt::hstring id;
-            bool saved;
-        };
         std::vector<WorkspaceSession> _workspaces;
         std::vector<std::pair<winrt::TerminalApp::Tab, winrt::hstring>> _tabWorkspaces;
         std::vector<WorkspaceFileEntry> _workspaceFileEntries;
         std::vector<std::filesystem::path> _workspaceSearchResults;
         std::vector<WorkspaceDocument> _workspaceDocuments;
-        std::vector<WorkspaceHubEntry> _workspaceHubEntries;
         winrt::hstring _activeWorkspaceId;
         bool _changingWorkspace{ false };
         bool _updatingDocumentTabs{ false };
@@ -337,7 +330,6 @@ namespace winrt::TerminalApp::implementation
         void _OpenWorkspace(const winrt::hstring& id);
         safe_void_coroutine _CreateNamedWorkspace();
         safe_void_coroutine _PickWorkspaceFolder();
-        safe_void_coroutine _EnterWorkspaceFolderPath();
         void _ShowWorkspaceHub();
         void _ShowWorkspaceContent();
         void _RefreshWorkspaceHub();
@@ -345,8 +337,8 @@ namespace winrt::TerminalApp::implementation
         void _WorkspaceHubBackClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceHubNewClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceHubFolderClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceHubPathClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceHubSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
+        void _WorkspaceHubOpenClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubDeleteClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _UpdateWorkspaceTabVisibility();
         void _UpdateWorkspaceFilesUI();
         void _RefreshWorkspaceFiles();
@@ -369,17 +361,12 @@ namespace winrt::TerminalApp::implementation
         void _UpdateWorkspaceDocumentLayout();
         void _WorkspaceDocumentSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
         void _WorkspaceDocumentTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& args);
-        void _WorkspaceDocumentMaximizeClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceContentSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
         void _WorkspaceFilesDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
         void _WorkspaceDocumentDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
         void _WorkspaceDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
         void _WorkspaceDividerPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _WorkspaceDividerPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
-        void _CloseWorkspacePreview();
-        void _WorkspaceChangeFolderClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceRefreshClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceClosePreviewClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         winrt::TerminalApp::ColorPickupFlyout _tabColorPicker{ nullptr };
 
         Microsoft::Terminal::Settings::Model::CascadiaSettings _settings{ nullptr };

@@ -876,6 +876,9 @@
   <data name="WorkspaceHubSavedStatus" xml:space="preserve">
     <value>已保存的工作区</value>
   </data>
+  <data name="WorkspaceHubDeleteButton" xml:space="preserve">
+    <value>删除</value>
+  </data>
   <data name="DefaultWorkspaceName" xml:space="preserve">
     <value>默认</value>
   </data>

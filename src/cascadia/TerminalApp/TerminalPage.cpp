@@ -5894,6 +5894,10 @@ namespace winrt::TerminalApp::implementation
         }
 
         _activeWorkspaceId = id;
+        if (id != L"__untitled_workspace__")
+        {
+            ApplicationState::SharedInstance().RecordRecentWorkspace(id);
+        }
         _ShowWorkspaceContent();
         _UpdateWorkspaceTabVisibility();
         _UpdateWorkspaceLabels();
@@ -6025,47 +6029,10 @@ namespace winrt::TerminalApp::implementation
         });
         if (const auto page = weakThis.get(); page && !folder.empty())
         {
-            page->_SwitchWorkspace(folder);
+            page->_SwitchWorkspace(winrt::hstring{ std::filesystem::path{ std::wstring_view{ folder } }.lexically_normal().native() });
         }
     }
     CATCH_LOG()
-
-    safe_void_coroutine TerminalPage::_EnterWorkspaceFolderPath()
-    {
-        ContentDialog dialog{};
-        dialog.Title(winrt::box_value(RS_(L"EnterFolderPathTitle")));
-        dialog.PrimaryButtonText(RS_(L"OpenFolderButton"));
-        dialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
-        dialog.DefaultButton(ContentDialogButton::Primary);
-        TextBox pathBox{};
-        pathBox.PlaceholderText(RS_(L"FolderPathPlaceholder"));
-        dialog.Content(pathBox);
-
-        const auto weakThis = get_weak();
-        if (const auto presenter = _dialogPresenter.get())
-        {
-            if (co_await presenter.ShowDialog(dialog) == ContentDialogResult::Primary)
-            {
-                if (const auto page = weakThis.get())
-                {
-                    const std::filesystem::path path{ std::wstring_view{ pathBox.Text() } };
-                    std::error_code error;
-                    if (path.is_absolute() && std::filesystem::is_directory(path, error))
-                    {
-                        page->_SwitchWorkspace(winrt::hstring{ path.lexically_normal().native() });
-                    }
-                    else
-                    {
-                        ContentDialog errorDialog{};
-                        errorDialog.Title(winrt::box_value(RS_(L"InvalidFolderPathTitle")));
-                        errorDialog.Content(winrt::box_value(RS_(L"InvalidFolderPathMessage")));
-                        errorDialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
-                        co_await presenter.ShowDialog(errorDialog);
-                    }
-                }
-            }
-        }
-    }
 
     // Show the active workspace name in both tab-strip layouts.
     void TerminalPage::_UpdateWorkspaceLabels()
@@ -6116,7 +6083,6 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        WorkspacePathText().Text(winrt::hstring{ workspace->root.native() });
         _workspaceFileEntries.clear();
         WorkspaceFileTree().RootNodes().Clear();
         const auto root = _CreateWorkspaceFileNode(workspace->root, true);
@@ -6660,17 +6626,6 @@ namespace winrt::TerminalApp::implementation
         _UpdateWorkspaceDocumentCaretStatus();
     }
 
-    void TerminalPage::_WorkspaceChangeFolderClick(const IInspectable&, const RoutedEventArgs&)
-    {
-        _PickWorkspaceFolder();
-    }
-
-    void TerminalPage::_WorkspaceRefreshClick(const IInspectable&, const RoutedEventArgs&)
-    {
-        WorkspaceFileSearchBox().Text(L"");
-        _RefreshWorkspaceFiles();
-    }
-
     void TerminalPage::_WorkspaceDocumentSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
     {
         if (_updatingDocumentTabs)
@@ -6711,30 +6666,6 @@ namespace winrt::TerminalApp::implementation
         _RefreshWorkspaceDocumentTabs();
     }
 
-    void TerminalPage::_CloseWorkspacePreview()
-    {
-        ++_workspaceDocumentVersion;
-        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
-        {
-            workspace->documentVisible = false;
-        }
-        _UpdateWorkspaceDocumentLayout();
-    }
-
-    void TerminalPage::_WorkspaceClosePreviewClick(const IInspectable&, const RoutedEventArgs&)
-    {
-        _CloseWorkspacePreview();
-    }
-
-    void TerminalPage::_WorkspaceDocumentMaximizeClick(const IInspectable&, const RoutedEventArgs&)
-    {
-        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
-        {
-            workspace->documentMaximized = !workspace->documentMaximized;
-            _UpdateWorkspaceDocumentLayout();
-        }
-    }
-
     void TerminalPage::_UpdateWorkspaceDocumentLayout()
     {
         WorkspaceDocumentTopInset().Height(GridLengthHelper::FromValueAndType(_tabPosition == TabPosition::Left ? 48.0 : 0.0, GridUnitType::Pixel));
@@ -6750,9 +6681,7 @@ namespace winrt::TerminalApp::implementation
         }
 
         const auto availableWidth = WorkspaceContentArea().ActualWidth();
-        const bool maximize = workspace->documentMaximized || (availableWidth > 0 && availableWidth < 520.0);
-        const auto maximizeCaption = workspace->documentMaximized ? RS_(L"WorkspaceDocumentRestore") : RS_(L"WorkspaceDocumentMaximize");
-        WorkspaceDocumentMaximizeButton().Content(winrt::box_value(maximizeCaption));
+        const bool maximize = availableWidth > 0 && availableWidth < 520.0;
         if (maximize)
         {
             WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
@@ -6962,14 +6891,25 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_RefreshWorkspaceHub()
     {
-        WorkspaceHubList().SelectedIndex(-1);
         WorkspaceHubList().Items().Clear();
-        _workspaceHubEntries.clear();
+        std::vector<winrt::hstring> listed;
 
-        const auto append = [this](const winrt::hstring& id, const winrt::hstring& title, const winrt::hstring& detail, bool saved) {
-            ListViewItem item{};
+        const auto append = [this, &listed](const winrt::hstring& id, const winrt::hstring& title, const winrt::hstring& detail) {
+            if (std::find(listed.begin(), listed.end(), id) != listed.end())
+            {
+                return;
+            }
+            listed.push_back(id);
+            Grid row{};
+            ColumnDefinition openColumn{};
+            openColumn.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+            row.ColumnDefinitions().Append(openColumn);
+            ColumnDefinition buttonColumn{};
+            buttonColumn.Width(GridLengthHelper::Auto());
+            row.ColumnDefinitions().Append(buttonColumn);
+            row.Margin(ThicknessHelper::FromLengths(8, 2, 8, 2));
+
             StackPanel content{};
-            content.Margin(ThicknessHelper::FromLengths(8, 6, 8, 6));
             TextBlock name{};
             name.Text(title);
             name.FontSize(16);
@@ -6980,30 +6920,56 @@ namespace winrt::TerminalApp::implementation
             subtitle.Opacity(0.7);
             subtitle.TextTrimming(TextTrimming::CharacterEllipsis);
             content.Children().Append(subtitle);
-            item.Content(content);
-            WorkspaceHubList().Items().Append(item);
-            _workspaceHubEntries.push_back({ id, saved });
+            Button open{};
+            open.Content(content);
+            open.Tag(winrt::box_value(id));
+            open.HorizontalAlignment(HorizontalAlignment::Stretch);
+            open.HorizontalContentAlignment(HorizontalAlignment::Left);
+            open.Click({ this, &TerminalPage::_WorkspaceHubOpenClick });
+            row.Children().Append(open);
+
+            Button remove{};
+            remove.Content(winrt::box_value(RS_(L"WorkspaceHubDeleteButton")));
+            remove.Tag(winrt::box_value(id));
+            remove.Margin(ThicknessHelper::FromLengths(8, 0, 0, 0));
+            remove.VerticalAlignment(VerticalAlignment::Center);
+            remove.Click({ this, &TerminalPage::_WorkspaceHubDeleteClick });
+            Grid::SetColumn(remove, 1);
+            row.Children().Append(remove);
+            WorkspaceHubList().Items().Append(row);
         };
 
-        for (const auto& workspace : _workspaces)
+        const auto state = ApplicationState::SharedInstance();
+        for (const auto& id : state.AllRecentWorkspaces())
         {
-            const auto detail = workspace.root.empty() ? RS_(L"WorkspaceHubRunningStatus") :
-                                winrt::hstring{ workspace.root.native() };
-            append(workspace.id, workspace.displayName, detail, false);
+            if (const auto workspace = _FindWorkspace(id))
+            {
+                const auto detail = workspace->root.empty() ? RS_(L"WorkspaceHubRunningStatus") :
+                                    winrt::hstring{ workspace->root.native() };
+                append(id, workspace->displayName, detail);
+            }
+            else
+            {
+                const std::filesystem::path path{ std::wstring_view{ id } };
+                const auto folder = path.is_absolute();
+                const auto title = folder && !path.filename().empty() ? winrt::hstring{ path.filename().native() } : id;
+                append(id, title, folder ? id : RS_(L"WorkspaceHubSavedStatus"));
+            }
         }
 
-        if (const auto saved = ApplicationState::SharedInstance().AllPersistedWorkspaces())
+        // Make layouts saved by older versions available until they are opened or removed.
+        if (const auto saved = state.AllPersistedWorkspaces())
         {
             for (const auto& entry : saved)
             {
-                if (!_FindWorkspace(entry.Key()))
+                if (std::find(listed.begin(), listed.end(), entry.Key()) == listed.end())
                 {
-                    append(entry.Key(), entry.Key(), RS_(L"WorkspaceHubSavedStatus"), true);
+                    append(entry.Key(), entry.Key(), RS_(L"WorkspaceHubSavedStatus"));
                 }
             }
         }
 
-        WorkspaceHubEmptyText().Visibility(_workspaceHubEntries.empty() ? Visibility::Visible : Visibility::Collapsed);
+        WorkspaceHubEmptyText().Visibility(listed.empty() ? Visibility::Visible : Visibility::Collapsed);
         bool hasActiveTab = false;
         for (const auto& tab : _tabs)
         {
@@ -7043,27 +7009,23 @@ namespace winrt::TerminalApp::implementation
         _PickWorkspaceFolder();
     }
 
-    void TerminalPage::_WorkspaceHubPathClick(const IInspectable&, const RoutedEventArgs&)
+    void TerminalPage::_WorkspaceHubOpenClick(const IInspectable& sender, const RoutedEventArgs&)
     {
-        _EnterWorkspaceFolderPath();
+        if (const auto button = sender.try_as<Button>())
+        {
+            _OpenWorkspace(winrt::unbox_value<winrt::hstring>(button.Tag()));
+        }
     }
 
-    void TerminalPage::_WorkspaceHubSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
+    void TerminalPage::_WorkspaceHubDeleteClick(const IInspectable& sender, const RoutedEventArgs&)
     {
-        const auto index = WorkspaceHubList().SelectedIndex();
-        if (index < 0 || static_cast<size_t>(index) >= _workspaceHubEntries.size())
+        if (const auto button = sender.try_as<Button>())
         {
-            return;
-        }
-        const auto entry = _workspaceHubEntries[index];
-        WorkspaceHubList().SelectedIndex(-1);
-        if (entry.saved)
-        {
-            _OpenWorkspace(entry.id);
-        }
-        else
-        {
-            _SwitchWorkspace(entry.id);
+            const auto id = winrt::unbox_value<winrt::hstring>(button.Tag());
+            auto state = ApplicationState::SharedInstance();
+            state.ForgetRecentWorkspace(id);
+            state.RemoveWorkspace(id);
+            _RefreshWorkspaceHub();
         }
     }
 

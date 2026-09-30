@@ -460,6 +460,51 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         return nullptr;
     }
 
+    void ApplicationState::RecordRecentWorkspace(const hstring& name)
+    {
+        if (name.empty())
+        {
+            return;
+        }
+        {
+            const auto state = _state.lock();
+            if (!state->RecentWorkspaces)
+            {
+                state->RecentWorkspaces.emplace();
+            }
+            auto& recent = *state->RecentWorkspaces;
+            recent.erase(std::remove(recent.begin(), recent.end(), name), recent.end());
+            recent.insert(recent.begin(), name);
+        }
+        _throttler();
+    }
+
+    bool ApplicationState::ForgetRecentWorkspace(const hstring& name)
+    {
+        bool removed = false;
+        {
+            const auto state = _state.lock();
+            if (state->RecentWorkspaces)
+            {
+                auto& recent = *state->RecentWorkspaces;
+                const auto end = std::remove(recent.begin(), recent.end(), name);
+                removed = end != recent.end();
+                recent.erase(end, recent.end());
+            }
+        }
+        if (removed)
+        {
+            _throttler();
+        }
+        return removed;
+    }
+
+    Windows::Foundation::Collections::IVectorView<hstring> ApplicationState::AllRecentWorkspaces()
+    {
+        const auto state = _state.lock_shared();
+        return winrt::single_threaded_vector<hstring>(state->RecentWorkspaces.value_or(std::vector<hstring>{})).GetView();
+    }
+
     // Generate all getter/setters
 #define MTSM_APPLICATION_STATE_GEN(source, type, name, key, ...) \
     type ApplicationState::name() const noexcept                 \
