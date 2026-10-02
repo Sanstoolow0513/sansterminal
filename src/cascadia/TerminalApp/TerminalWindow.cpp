@@ -1179,6 +1179,24 @@ namespace winrt::TerminalApp::implementation
             {
                 auto layout = layouts.GetAt(i);
 
+                // Named windows persist a stub pointing to their full layout.
+                // Resolve it before reading window bounds and launch mode, and
+                // replay its window actions instead of importing it in-page.
+                if (const auto actions = layout.TabLayout(); actions && actions.Size() == 1)
+                {
+                    const auto action = actions.GetAt(0);
+                    if (action.Action() == ShortcutAction::OpenWorkspace)
+                    {
+                        if (const auto args = action.Args().try_as<OpenWorkspaceArgs>(); args && !args.Name().empty())
+                        {
+                            if (const auto workspace = ApplicationState::SharedInstance().TakeWorkspace(args.Name()))
+                            {
+                                layout = workspace;
+                            }
+                        }
+                    }
+                }
+
                 // TODO: GH#12633: Right now, we're manually making sure that we
                 // have at least one tab to restore. If we ever want to come
                 // back and make it so that you can persist position and size,

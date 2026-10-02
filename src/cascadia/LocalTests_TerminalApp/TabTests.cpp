@@ -131,6 +131,8 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceResizeCallbacks);
         TEST_METHOD(WorkspacePanelResizeRequests);
         TEST_METHOD(WorkspaceLayoutTabOrder);
+        TEST_METHOD(NamedWindowLayoutRestoration);
+        TEST_METHOD(WorkspaceLayoutRecentHistory);
         TEST_METHOD(WorkspaceLayoutReplayOwnership);
         TEST_METHOD(WorkspaceMoveTabNeighbors);
         TEST_METHOD(WorkspaceHeaderRestorationAndThemeReload);
@@ -794,6 +796,17 @@ namespace TerminalAppLocalTests
         const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
         TestOnUIThread([&]() {
             const auto workspaceA = page->_activeWorkspaceId;
+            const auto appData = winrt::Windows::Storage::ApplicationData::Current();
+            const auto workspaceFolder = appData.TemporaryFolder().Path();
+            const auto explicitFolder = appData.LocalFolder().Path();
+            page->_FindWorkspace(workspaceA)->root = std::filesystem::path{ workspaceFolder.c_str() };
+            page->_settings.ActiveProfiles().GetAt(0).StartingDirectory(explicitFolder);
+            // Keep the launch settings visible after tab initialization.
+            CascadiaSettings cacheSettings{ LR"({
+                "profiles": [{ "name": "Unused cache profile", "guid": "{6239a42c-4444-49a3-80bd-e8fdd045185c}" }]
+            })",
+                                            {} };
+            page->_terminalSettingsCache->Reset(cacheSettings, cacheSettings.WindowSettings(L""));
             const auto terminalA = page->_GetFocusedTab();
             page->_SwitchWorkspace(L"empty-split-B");
             const auto terminalB = page->_GetFocusedTab();
@@ -811,22 +824,32 @@ namespace TerminalAppLocalTests
 
             for (const auto splitMode : { SplitType::Manual, SplitType::Duplicate })
             {
-                SplitPaneArgs args{ splitMode };
-                ActionEventArgs eventArgs{ args };
-                const winrt::IInspectable sender = splitMode == SplitType::Manual ?
-                                                       page->WorkspaceNavigation().as<winrt::IInspectable>() :
-                                                       page->WorkspaceFilesPanel().as<winrt::IInspectable>();
-                page->_HandleSplitPane(sender, eventArgs);
-                VERIFY_IS_TRUE(eventArgs.Handled());
-                VERIFY_ARE_EQUAL(2u, page->NumberOfTabs());
-                VERIFY_ARE_EQUAL(workspaceA, page->_activeWorkspaceId);
-                VERIFY_ARE_EQUAL(workspaceA, page->_WorkspaceForTab(page->_GetFocusedTab()));
-                VERIFY_ARE_EQUAL(1, page->_GetFocusedTabImpl()->GetLeafPaneCount());
-                VERIFY_ARE_EQUAL(1, page->_GetTabImpl(terminalB)->GetLeafPaneCount());
-                VERIFY_IS_TRUE(page->_GetTabImpl(terminalB)->GetActiveTerminalControl() == controlB);
-                VERIFY_IS_TRUE(controlB.Connection() == connectionB);
-                page->_GetFocusedTab().Close();
-                VERIFY_IS_NULL(page->_GetFocusedTabImpl());
+                for (const bool explicitDirectory : { false, true })
+                {
+                    NewTerminalArgs contentArgs{};
+                    if (explicitDirectory)
+                    {
+                        contentArgs.StartingDirectory(explicitFolder);
+                    }
+                    SplitPaneArgs args{ splitMode, SplitDirection::Automatic, 0.5f, contentArgs };
+                    ActionEventArgs eventArgs{ args };
+                    const winrt::IInspectable sender = splitMode == SplitType::Manual ?
+                                                           page->WorkspaceNavigation().as<winrt::IInspectable>() :
+                                                           page->WorkspaceFilesPanel().as<winrt::IInspectable>();
+                    page->_HandleSplitPane(sender, eventArgs);
+                    VERIFY_IS_TRUE(eventArgs.Handled());
+                    VERIFY_ARE_EQUAL(2u, page->NumberOfTabs());
+                    VERIFY_ARE_EQUAL(workspaceA, page->_activeWorkspaceId);
+                    VERIFY_ARE_EQUAL(workspaceA, page->_WorkspaceForTab(page->_GetFocusedTab()));
+                    VERIFY_ARE_EQUAL(1, page->_GetFocusedTabImpl()->GetLeafPaneCount());
+                    VERIFY_ARE_EQUAL(explicitDirectory ? explicitFolder : workspaceFolder, page->_GetActiveControl().Settings().StartingDirectory());
+                    VERIFY_ARE_EQUAL(explicitDirectory ? explicitFolder : winrt::hstring{}, contentArgs.StartingDirectory());
+                    VERIFY_ARE_EQUAL(1, page->_GetTabImpl(terminalB)->GetLeafPaneCount());
+                    VERIFY_IS_TRUE(page->_GetTabImpl(terminalB)->GetActiveTerminalControl() == controlB);
+                    VERIFY_IS_TRUE(controlB.Connection() == connectionB);
+                    page->_GetFocusedTab().Close();
+                    VERIFY_IS_NULL(page->_GetFocusedTabImpl());
+                }
             }
 
             // The same promotion also works when the whole window is empty.
@@ -835,6 +858,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Manual } }));
             VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
             VERIFY_ARE_EQUAL(workspaceA, page->_WorkspaceForTab(page->_GetFocusedTab()));
+            VERIFY_ARE_EQUAL(workspaceFolder, page->_GetActiveControl().Settings().StartingDirectory());
         });
     }
 
@@ -1398,6 +1422,10 @@ namespace TerminalAppLocalTests
         winrt::event_token completionToken{};
         winrt::hstring workspaceA;
         TestOnUIThread([&]() {
+            _windowProperties->WindowName(L"layout-order-window");
+            page->RenameWindowRequested([this](auto&&, const winrt::TerminalApp::RenameWindowRequestedArgs args) {
+                _windowProperties->WindowName(args.ProposedName());
+            });
             page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterLastTab);
             workspaceA = page->_activeWorkspaceId;
             page->_SwitchWorkspace(L"layout-order-B", false);
@@ -1419,11 +1447,12 @@ namespace TerminalAppLocalTests
             }
             page->_SwitchWorkspace(workspaceA, false);
             page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterCurrentTab);
-            completionToken = page->_actionDispatch->SwitchToTab([event = completed.get()](auto&&, auto&&) { SetEvent(event); });
+            _windowProperties->WindowName(L"");
+            completionToken = page->_actionDispatch->RenameWindow([event = completed.get()](auto&&, auto&&) { SetEvent(event); });
             page->ProcessStartupActions(std::move(actions), {}, {}, !markers);
         });
         const auto revoke = wil::scope_exit([&]() noexcept {
-            RunOnUIThread([&]() { page->_actionDispatch->SwitchToTab(completionToken); });
+            RunOnUIThread([&]() { page->_actionDispatch->RenameWindow(completionToken); });
         });
         VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(completed.get(), 10000));
         TestOnUIThread([&]() {
@@ -1433,6 +1462,7 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(L"Profile 2", page->_tabs.GetAt(2).Title());
             VERIFY_ARE_EQUAL(1u, page->_GetFocusedTabIndex().value());
             VERIFY_ARE_EQUAL(markers ? winrt::hstring{ L"layout-order-B" } : workspaceA, page->_activeWorkspaceId);
+            VERIFY_ARE_EQUAL(L"layout-order-window", page->WindowProperties().WindowName());
 
             // Replaying a layout must not change the insertion policy for the
             // user's next interactive new-tab command.
@@ -1440,6 +1470,151 @@ namespace TerminalAppLocalTests
             VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 3 }));
             VERIFY_ARE_EQUAL(L"Profile 3", page->_tabs.GetAt(1).Title());
             VERIFY_ARE_EQUAL(L"Profile 1", page->_tabs.GetAt(2).Title());
+        });
+    }
+
+    void TabTests::NamedWindowLayoutRestoration()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            const auto state = ApplicationState::SharedInstance();
+            const auto savedLayouts = state.PersistedWindowLayouts();
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto name = winrt::to_hstring(unique);
+            const auto restoreState = wil::scope_exit([&]() noexcept {
+                state.RemoveWorkspace(name);
+                state.PersistedWindowLayouts(savedLayouts);
+            });
+            state.PersistedWindowLayouts(nullptr);
+            _windowProperties->WindowName(name);
+            page->_isInFocusMode = true;
+            page->_isMaximized = true;
+            page->RequestLaunchPosition([](auto&&, const winrt::TerminalApp::LaunchPositionRequest& request) {
+                request.Position(LaunchPosition{ 123, 456 });
+            });
+            page->UpdateLayout();
+            const auto expected = page->GetWindowLayout();
+            page->PersistState();
+            const auto stub = state.PersistedWindowLayouts().GetAt(0);
+            VERIFY_ARE_EQUAL(1u, stub.TabLayout().Size());
+            VERIFY_ARE_EQUAL(ShortcutAction::OpenWorkspace, stub.TabLayout().GetAt(0).Action());
+
+            const auto settings = page->_settings;
+            settings.GlobalSettings().FirstWindowPreference(FirstWindowPreference::PersistedLayout);
+            const auto loadResult = winrt::make<winrt::TerminalApp::implementation::SettingsLoadEventArgs>(false, S_OK, L"", nullptr, settings);
+            const auto window = winrt::make_self<winrt::TerminalApp::implementation::TerminalWindow>(loadResult, *_contentManager);
+            window->SetPersistedLayoutIdx(0);
+            // Window creation reads these before creating the TerminalPage.
+            VERIFY_ARE_EQUAL(expected.LaunchMode().Value(), window->GetLaunchMode());
+            const auto dimensions = window->GetLaunchDimensions(USER_DEFAULT_SCREEN_DPI);
+            VERIFY_ARE_EQUAL(expected.InitialSize().Value().Width, dimensions.Width);
+            VERIFY_ARE_EQUAL(expected.InitialSize().Value().Height, dimensions.Height);
+            const auto position = window->GetInitialPosition(0, 0);
+            VERIFY_ARE_EQUAL(123, position.X);
+            VERIFY_ARE_EQUAL(456, position.Y);
+            const auto restored = window->LoadPersistedLayout();
+            VERIFY_ARE_EQUAL(expected.TabLayout().Size(), restored.TabLayout().Size());
+            const auto rename = restored.TabLayout().GetAt(restored.TabLayout().Size() - 1);
+            VERIFY_ARE_EQUAL(ShortcutAction::RenameWindow, rename.Action());
+            VERIFY_ARE_EQUAL(name, rename.Args().as<RenameWindowArgs>().Name());
+            VERIFY_IS_NULL(state.TakeWorkspace(name));
+            VERIFY_IS_TRUE(window->LoadPersistedLayout() == restored);
+        });
+    }
+
+    void TabTests::WorkspaceLayoutRecentHistory()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:markers", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:emptyRecent", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool markers;
+        bool emptyRecent;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"markers", markers));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"emptyRecent", emptyRecent));
+        const auto page = _commonSetup();
+        const auto state = ApplicationState::SharedInstance();
+        IVectorView<winrt::hstring> savedRecent{ nullptr };
+        WindowLayout savedWorkspace{ nullptr };
+        TestOnUIThread([&]() {
+            savedRecent = state.AllRecentWorkspaces();
+            if (const auto workspaces = state.AllPersistedWorkspaces(); workspaces && workspaces.HasKey(L"removed-recent-A"))
+            {
+                savedWorkspace = workspaces.Lookup(L"removed-recent-A");
+            }
+        });
+        const auto restoreState = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() {
+                state.RemoveWorkspace(L"removed-recent-A");
+                if (savedWorkspace)
+                {
+                    state.SaveWorkspace(L"removed-recent-A", savedWorkspace);
+                }
+                for (const auto& id : state.AllRecentWorkspaces())
+                {
+                    state.ForgetRecentWorkspace(id);
+                }
+                for (auto i = savedRecent.Size(); i > 0; --i)
+                {
+                    state.RecordRecentWorkspace(savedRecent.GetAt(i - 1));
+                }
+            });
+        });
+        const wil::unique_handle completed{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        VERIFY_IS_NOT_NULL(completed.get());
+        winrt::event_token completionToken{};
+        TestOnUIThread([&]() {
+            page->_SwitchWorkspace(L"removed-recent-A");
+            const auto selected = page->_GetFocusedTab();
+            page->_SwitchWorkspace(L"removed-recent-B");
+            page->FocusTab(selected);
+            const auto layout = page->GetWindowLayout();
+            auto actions = wil::to_vector(layout.TabLayout());
+            if (!markers)
+            {
+                std::erase_if(actions, [](const auto& action) { return action.Action() == ShortcutAction::OpenWorkspace; });
+            }
+            for (const auto& id : state.AllRecentWorkspaces())
+            {
+                VERIFY_IS_TRUE(state.ForgetRecentWorkspace(id));
+            }
+            if (!emptyRecent)
+            {
+                state.RecordRecentWorkspace(L"retained-recent");
+            }
+            // Removing Recent entries leaves the live layout restorable.
+            // Replay must preserve an explicitly empty history as well.
+            state.SaveWorkspace(L"removed-recent-A", layout);
+            VERIFY_IS_TRUE(state.AllPersistedWorkspaces().HasKey(L"removed-recent-A"));
+            const std::vector<winrt::TerminalApp::Tab> tabs{ page->_tabs.begin(), page->_tabs.end() };
+            for (const auto& tab : tabs)
+            {
+                tab.Close();
+            }
+            completionToken = page->_actionDispatch->SwitchToTab([event = completed.get()](auto&&, auto&&) { SetEvent(event); });
+            page->ProcessStartupActions(std::move(actions), {}, {}, true);
+        });
+        const auto revoke = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() { page->_actionDispatch->SwitchToTab(completionToken); });
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(completed.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(3u, page->NumberOfTabs());
+            const auto recent = state.AllRecentWorkspaces();
+            VERIFY_ARE_EQUAL(emptyRecent ? 0u : 1u, recent.Size());
+            if (!emptyRecent)
+            {
+                VERIFY_ARE_EQUAL(L"retained-recent", recent.GetAt(0));
+            }
+            // Explicitly opening the restored session records it again.
+            page->_OpenWorkspace(L"removed-recent-A");
+            VERIFY_ARE_EQUAL(L"removed-recent-A", state.AllRecentWorkspaces().GetAt(0));
         });
     }
 
@@ -1499,6 +1674,7 @@ namespace TerminalAppLocalTests
             ApplicationState::SharedInstance().SaveWorkspace(restoredWorkspace, layout);
             page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterCurrentTab);
             page->_OpenWorkspace(restoredWorkspace);
+            VERIFY_ARE_EQUAL(restoredWorkspace, ApplicationState::SharedInstance().AllRecentWorkspaces().GetAt(0));
         });
         const auto revoke = wil::scope_exit([&]() noexcept {
             RunOnUIThread([&]() {
@@ -1722,9 +1898,12 @@ namespace TerminalAppLocalTests
     {
         BEGIN_TEST_METHOD_PROPERTIES()
             TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:compact", L"{true, false}")
         END_TEST_METHOD_PROPERTIES();
         bool sideTabs;
+        bool compact;
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"compact", compact));
         const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
         TestOnUIThread([&]() {
             GUID unique{};
@@ -1737,18 +1916,30 @@ namespace TerminalAppLocalTests
             std::ofstream{ file } << "compact document preview";
             const auto workspaceA = page->_activeWorkspaceId;
             const auto terminal = page->_GetFocusedTab();
-            page->WorkspaceContentArea().Width(480);
+            page->WorkspaceContentArea().Width(compact ? 480 : 1000);
             page->UpdateLayout();
             page->_OpenWorkspaceDocument(file, true);
-            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
-            page->_SwitchWorkspace(L"compact-restoration-B", false);
+            if (compact)
+            {
+                VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            }
+            // B has a terminal and no preview, so the shared editor loses
+            // focus. Returning to A must use A's saved surface preference.
+            page->_SwitchWorkspace(L"compact-restoration-B");
             page->_SwitchWorkspace(workspaceA, false);
             VERIFY_IS_FALSE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
-            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            if (compact)
+            {
+                VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            }
             VERIFY_IS_TRUE(page->_GetFocusedTab() == terminal);
             VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
             VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(terminal)->_focusState);
+            page->WorkspaceContentArea().Width(480);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
 
             // Returning from the hub must leave keyboard input in the visible
             // preview while the terminal column has zero width.

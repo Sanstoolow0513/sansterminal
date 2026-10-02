@@ -841,9 +841,12 @@ namespace winrt::TerminalApp::implementation
             }
             else
             {
-                // Activation can change while we yield. Every restored action,
-                // including pane splits, must run in its serialized workspace.
-                if (restoringLayout && _activeWorkspaceId != replayWorkspaceId)
+                // Activation can change while we yield. Tab and pane actions
+                // must run in their serialized workspace. Final selection and
+                // window actions must preserve the workspace of the saved tab.
+                const auto action = actions[i].Action();
+                if (restoringLayout && action != ShortcutAction::SwitchToTab && action != ShortcutAction::RenameWindow &&
+                    _activeWorkspaceId != replayWorkspaceId)
                 {
                     _SwitchWorkspace(replayWorkspaceId, false);
                 }
@@ -6288,7 +6291,7 @@ namespace winrt::TerminalApp::implementation
 
         _activeWorkspaceId = id;
         _RefreshWorkspaceNavigation();
-        if (id != L"__untitled_workspace__")
+        if (!_restoringLayout && id != L"__untitled_workspace__")
         {
             ApplicationState::SharedInstance().RecordRecentWorkspace(id);
         }
@@ -6348,6 +6351,12 @@ namespace winrt::TerminalApp::implementation
         // Their terminal tabs are recreated here, while existing tabs stay live.
         if (const auto layout = ApplicationState::SharedInstance().TakeWorkspace(id))
         {
+            // Importing a saved workspace is an explicit user open, even though
+            // its tab actions use restoration insertion semantics.
+            if (!_restoringLayout && id != L"__untitled_workspace__")
+            {
+                ApplicationState::SharedInstance().RecordRecentWorkspace(id);
+            }
             std::vector<ActionAndArgs> actions;
             const auto tabIndexOffset = _tabs.Size();
             if (const auto tabLayout = layout.TabLayout())

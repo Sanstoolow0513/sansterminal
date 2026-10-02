@@ -280,9 +280,17 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            const auto& duplicateFromTab{ realArgs.SplitMode() == SplitType::Duplicate ? _GetFocusedTab() : nullptr };
-
             const auto& activeTab{ _senderOrFocusedTab(sender) };
+            if (!activeTab)
+            {
+                // An empty workspace promotes the split to a new tab. Apply
+                // its launch defaults before constructing the connection.
+                LOG_IF_FAILED(_OpenNewTab(realArgs.ContentArgs()));
+                args.Handled(true);
+                return;
+            }
+
+            const auto& duplicateFromTab{ realArgs.SplitMode() == SplitType::Duplicate ? _GetFocusedTab() : nullptr };
 
             _SplitPane(activeTab,
                        realArgs.SplitDirection(),

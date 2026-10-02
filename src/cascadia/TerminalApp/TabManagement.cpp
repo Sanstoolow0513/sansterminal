@@ -1464,13 +1464,14 @@ namespace winrt::TerminalApp::implementation
     {
         // Passive selection must preserve document focus when both panes are
         // visible, and must never focus a terminal hidden by compact layout.
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
         const auto terminalWidth = WorkspaceTerminalColumn().Width();
         if (WorkspaceHub().Visibility() == Visibility::Visible)
         {
             WorkspaceHubNewButton().Focus(FocusState::Programmatic);
         }
         else if (WorkspaceDocumentPanel().Visibility() == Visibility::Visible &&
-                 (!tab || WorkspaceDocumentEditor().FocusState() != FocusState::Unfocused ||
+                 (!tab || (workspace && !workspace->preferTerminalInCompactView) ||
                   (terminalWidth.GridUnitType == GridUnitType::Pixel && terminalWidth.Value == 0)))
         {
             WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
