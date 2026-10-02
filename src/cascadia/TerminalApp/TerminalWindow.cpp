@@ -633,12 +633,12 @@ namespace winrt::TerminalApp::implementation
             };
         }
 
-        // Include the header whenever settings keep it visible, including the
-        // workspace button in a single-tab window.
+        // Reserve the native titlebar even when its workspace header is hidden.
+        // Otherwise include the header whenever settings keep it visible.
         const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings());
         const bool showWorkspacesButton = !theme || !theme.Window() || theme.Window().ShowWorkspacesButton();
         const bool sideTabs = _currentWindowSettings().TabPosition() == TabPosition::Left;
-        if (!sideTabs && _currentWindowSettings().ShowTabsInTitlebar() && !focusMode)
+        if (_currentWindowSettings().ShowTabsInTitlebar() && !focusMode)
         {
             // In the past, we used to actually instantiate a TitlebarControl
             // and use Measure() to determine the DesiredSize of the control, to

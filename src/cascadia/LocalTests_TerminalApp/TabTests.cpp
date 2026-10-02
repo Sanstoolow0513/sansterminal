@@ -119,6 +119,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceNavigationLifecycle);
         TEST_METHOD(WorkspaceExplorerContext);
         TEST_METHOD(EmptyWorkspaceWindowClose);
+        TEST_METHOD(EmptyWorkspaceSplit);
         TEST_METHOD(WorkspaceBulkClose);
         TEST_METHOD(WorkspaceLaunchArguments);
         TEST_METHOD(TopTabWorkspaceNavigation);
@@ -128,6 +129,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceTabSwitcherModes);
         TEST_METHOD(WorkspaceSidebarTabColors);
         TEST_METHOD(WorkspaceResizeCallbacks);
+        TEST_METHOD(WorkspacePanelResizeRequests);
         TEST_METHOD(WorkspaceLayoutTabOrder);
         TEST_METHOD(WorkspaceLayoutReplayOwnership);
         TEST_METHOD(WorkspaceMoveTabNeighbors);
@@ -782,6 +784,60 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::EmptyWorkspaceSplit()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            const auto workspaceA = page->_activeWorkspaceId;
+            const auto terminalA = page->_GetFocusedTab();
+            page->_SwitchWorkspace(L"empty-split-B");
+            const auto terminalB = page->_GetFocusedTab();
+            const auto controlB = page->_GetActiveControl();
+            const auto connectionB = controlB.Connection();
+            page->_SwitchWorkspace(workspaceA, false);
+            terminalA.Close();
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_IS_NULL(page->_GetFocusedTabImpl());
+
+            // Elevation can leave no pane to insert. It must not create a tab.
+            page->_SplitPane(nullptr, SplitDirection::Automatic, 0.5f, nullptr);
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_IS_NULL(page->_GetFocusedTabImpl());
+
+            for (const auto splitMode : { SplitType::Manual, SplitType::Duplicate })
+            {
+                SplitPaneArgs args{ splitMode };
+                ActionEventArgs eventArgs{ args };
+                const winrt::IInspectable sender = splitMode == SplitType::Manual ?
+                                                       page->WorkspaceNavigation().as<winrt::IInspectable>() :
+                                                       page->WorkspaceFilesPanel().as<winrt::IInspectable>();
+                page->_HandleSplitPane(sender, eventArgs);
+                VERIFY_IS_TRUE(eventArgs.Handled());
+                VERIFY_ARE_EQUAL(2u, page->NumberOfTabs());
+                VERIFY_ARE_EQUAL(workspaceA, page->_activeWorkspaceId);
+                VERIFY_ARE_EQUAL(workspaceA, page->_WorkspaceForTab(page->_GetFocusedTab()));
+                VERIFY_ARE_EQUAL(1, page->_GetFocusedTabImpl()->GetLeafPaneCount());
+                VERIFY_ARE_EQUAL(1, page->_GetTabImpl(terminalB)->GetLeafPaneCount());
+                VERIFY_IS_TRUE(page->_GetTabImpl(terminalB)->GetActiveTerminalControl() == controlB);
+                VERIFY_IS_TRUE(controlB.Connection() == connectionB);
+                page->_GetFocusedTab().Close();
+                VERIFY_IS_NULL(page->_GetFocusedTabImpl());
+            }
+
+            // The same promotion also works when the whole window is empty.
+            terminalB.Close();
+            VERIFY_ARE_EQUAL(0u, page->NumberOfTabs());
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Manual } }));
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_ARE_EQUAL(workspaceA, page->_WorkspaceForTab(page->_GetFocusedTab()));
+        });
+    }
+
     void TabTests::WorkspaceBulkClose()
     {
         BEGIN_TEST_METHOD_PROPERTIES()
@@ -1263,6 +1319,69 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::WorkspacePanelResizeRequests()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto root = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / winrt::to_hstring(unique).c_str();
+            std::filesystem::create_directories(root);
+            const auto cleanup = wil::scope_exit([&]() noexcept {
+                std::error_code error;
+                std::filesystem::remove_all(root, error);
+            });
+            const auto file = root / L"resize.txt";
+            std::ofstream{ file } << "workspace resize";
+            page->Width(1400);
+            page->Height(850);
+            page->UpdateLayout();
+
+            uint32_t resizeRequests = 0;
+            const auto token = page->WindowSizeChanged([&](auto&&, auto&&) { ++resizeRequests; });
+            const auto revoke = wil::scope_exit([&]() noexcept { page->WindowSizeChanged(token); });
+            const winrt::Microsoft::Terminal::Control::WindowSizeChangedEventArgs args{ nullptr };
+            const auto control = page->_GetActiveControl();
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(1u, resizeRequests);
+
+            // A document alone consumes part of the requested terminal width.
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceFilesPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(1u, resizeRequests);
+            page->_FindWorkspace(page->_activeWorkspaceId)->documentVisible = false;
+            page->_UpdateWorkspaceDocumentLayout();
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(2u, resizeRequests);
+
+            // Keep a single terminal globally, first with only the explorer,
+            // then with both workspace panels visible.
+            page->_GetFocusedTab().Close();
+            page->_SwitchWorkspace(winrt::hstring{ root.native() });
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceFilesPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            const auto folderControl = page->_GetActiveControl();
+            page->_WindowSizeChanged(folderControl, args);
+            VERIFY_ARE_EQUAL(2u, resizeRequests);
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceFilesPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            page->_WindowSizeChanged(folderControl, args);
+            VERIFY_ARE_EQUAL(2u, resizeRequests);
+        });
+    }
+
     void TabTests::WorkspaceLayoutTabOrder()
     {
         BEGIN_TEST_METHOD_PROPERTIES()
@@ -1486,13 +1605,16 @@ namespace TerminalAppLocalTests
     {
         BEGIN_TEST_METHOD_PROPERTIES()
             TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:showTabsInTitlebar", L"{true, false}")
             TEST_METHOD_PROPERTY(L"Data:focusMode", L"{true, false}")
             TEST_METHOD_PROPERTY(L"Data:dpi", L"{96, 144}")
         END_TEST_METHOD_PROPERTIES();
         bool sideTabs;
+        bool showTabsInTitlebar;
         bool focusMode;
         uint32_t dpi;
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"showTabsInTitlebar", showTabsInTitlebar));
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"focusMode", focusMode));
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"dpi", dpi));
         CascadiaSettings settings{ LR"({
@@ -1507,6 +1629,7 @@ namespace TerminalAppLocalTests
         })",
                                    {} };
         settings.WindowSettings(L"").TabPosition(sideTabs ? TabPosition::Left : TabPosition::Top);
+        settings.WindowSettings(L"").ShowTabsInTitlebar(showTabsInTitlebar);
         winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
         _initializeTerminalPage(page, settings);
         TestOnUIThread([&]() {
@@ -1516,13 +1639,14 @@ namespace TerminalAppLocalTests
             const auto loadResult = winrt::make<winrt::TerminalApp::implementation::SettingsLoadEventArgs>(false, S_OK, L"", nullptr, settings);
             const auto window = winrt::make_self<winrt::TerminalApp::implementation::TerminalWindow>(loadResult, *_contentManager);
             const auto scale = static_cast<float>(dpi) / USER_DEFAULT_SCREEN_DPI;
+            const auto captionHeight = showTabsInTitlebar && !focusMode ? 40.0f : 0.0f;
             for (const bool showButton : { false, true, false })
             {
                 settings.WindowSettings(L"").Theme(ThemePair{ showButton ? L"header-shown" : L"header-test" });
                 page->SetSettings(settings, true);
                 page->UpdateLayout();
                 VERIFY_ARE_EQUAL(showButton, page->_tabRow.ShowWorkspacesButton());
-                const auto expectedVisibility = showButton && !focusMode ? Visibility::Visible : Visibility::Collapsed;
+                const auto expectedVisibility = (showButton || (showTabsInTitlebar && !sideTabs)) && !focusMode ? Visibility::Visible : Visibility::Collapsed;
                 VERIFY_ARE_EQUAL(expectedVisibility, sideTabs ? page->WorkspaceHeader().Visibility() : page->_tabView.Visibility());
 
                 // Feed each restored size back into persistence. Neither DPI
@@ -1533,8 +1657,9 @@ namespace TerminalAppLocalTests
                     window->SetPersistedLayout(page->GetWindowLayout());
                     const auto dimensions = window->GetLaunchDimensions(dpi);
                     VERIFY_ARE_EQUAL(1000.0f * scale, dimensions.Width);
-                    VERIFY_ARE_EQUAL(800.0f * scale, dimensions.Height);
-                    page->Height(dimensions.Height / scale);
+                    VERIFY_ARE_EQUAL((800.0f + captionHeight) * scale, dimensions.Height);
+                    // The native caption occupies space outside TerminalPage.
+                    page->Height(dimensions.Height / scale - captionHeight);
                     page->UpdateLayout();
                 }
             }
@@ -1552,7 +1677,7 @@ namespace TerminalAppLocalTests
                 const auto expectedVisibility = focusMode ? Visibility::Collapsed : Visibility::Visible;
                 VERIFY_ARE_EQUAL(expectedVisibility, sideTabs ? page->WorkspaceHeader().Visibility() : page->_tabView.Visibility());
                 window->SetPersistedLayout(page->GetWindowLayout());
-                VERIFY_ARE_EQUAL(800.0f * scale, window->GetLaunchDimensions(dpi).Height);
+                VERIFY_ARE_EQUAL((800.0f + captionHeight) * scale, window->GetLaunchDimensions(dpi).Height);
             }
         });
     }

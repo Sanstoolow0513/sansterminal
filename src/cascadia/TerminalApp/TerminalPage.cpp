@@ -2985,46 +2985,27 @@ namespace winrt::TerminalApp::implementation
                                   const float splitSize,
                                   std::shared_ptr<Pane> newPane)
     {
-        auto activeTab = tab;
-        // Clever hack for a crash in startup, with multiple sub-commands. Say
-        // you have the following commandline:
-        //
-        //   wtd nt -p "elevated cmd" ; sp -p "elevated cmd" ; sp -p "Command Prompt"
-        //
-        // Where "elevated cmd" is an elevated profile.
-        //
-        // In that scenario, we won't dump off the commandline immediately to an
-        // elevated window, because it's got the final unelevated split in it.
-        // However, when we get to that command, there won't be a tab yet. So
-        // we'd crash right about here.
-        //
-        // Instead, let's just promote this first split to be a tab instead.
-        // Crash avoided, and we don't need to worry about inserting a new-tab
-        // command in at the start.
-        if (!tab)
-        {
-            if (_tabs.Size() == 0)
-            {
-                _CreateNewTabFromPane(newPane);
-                return;
-            }
-            else
-            {
-                activeTab = _GetFocusedTabImpl();
-            }
-        }
-
-        // For now, prevent splitting the _settingsTab. We can always revisit this later.
-        if (*activeTab == _settingsTab)
-        {
-            return;
-        }
-
         // If the caller is calling us with the return value of _MakePane
         // directly, it's possible that nullptr was returned, if the connections
         // was supposed to be launched in an elevated window. In that case, do
         // nothing here. We don't have a pane with which to create the split.
         if (!newPane)
+        {
+            return;
+        }
+
+        const auto activeTab = tab ? tab : _GetFocusedTabImpl();
+        // The active workspace can be empty while other workspaces have tabs.
+        // Promote a split without a target to a new tab, also covering startup
+        // when earlier commands launched elevated terminals in another window.
+        if (!activeTab)
+        {
+            _CreateNewTabFromPane(newPane);
+            return;
+        }
+
+        // For now, prevent splitting the _settingsTab. We can always revisit this later.
+        if (*activeTab == _settingsTab)
         {
             return;
         }
@@ -3712,12 +3693,15 @@ namespace winrt::TerminalApp::implementation
         // - Not in fullscreen
         // - Only one tab exists
         // - Only one pane exists
+        // - No workspace explorer or document panel is visible
         // - The requesting control belongs to the focused, active-workspace tab
         // else:
         // - Reset conpty to its original size back
         if (control && focusedTab && _IsTabInActiveWorkspace(*focusedTab) &&
             !WindowProperties().IsQuakeWindow() && !Fullscreen() &&
             NumberOfTabs() == 1 && focusedTab->GetLeafPaneCount() == 1 &&
+            WorkspaceFilesPanel().Visibility() == Visibility::Collapsed &&
+            WorkspaceDocumentPanel().Visibility() == Visibility::Collapsed &&
             focusedTab->GetActiveTerminalControl() == control)
         {
             WindowSizeChanged.raise(*this, args);
