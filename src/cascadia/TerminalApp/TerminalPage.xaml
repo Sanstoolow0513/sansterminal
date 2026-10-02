@@ -141,7 +141,8 @@
                 <Grid x:Name="TabContent"
                       Grid.Column="0"
                       HorizontalAlignment="Stretch"
-                      VerticalAlignment="Stretch">
+                      VerticalAlignment="Stretch"
+                      GotFocus="_WorkspaceTerminalGotFocus">
                     <Grid.Background>
                         <ImageBrush />
                     </Grid.Background>
@@ -168,6 +169,7 @@
                                  FontFamily="Cascadia Mono"
                                  IsReadOnly="True"
                                  ActualThemeChanged="_WorkspaceDocumentThemeChanged"
+                                 GotFocus="_WorkspaceDocumentGotFocus"
                                  SelectionChanged="_WorkspaceDocumentCaretChanged"
                                  TextWrapping="NoWrap" />
                     <Grid Grid.Row="2"

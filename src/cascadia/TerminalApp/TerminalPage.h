@@ -392,6 +392,8 @@ namespace winrt::TerminalApp::implementation
         safe_void_coroutine _ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, bool dark, uint64_t version);
         void _UpdateWorkspaceDocumentCaretStatus();
         void _WorkspaceDocumentCaretChanged(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceTerminalGotFocus(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceDocumentGotFocus(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _UpdateWorkspaceDocumentLayout();
         void _WorkspaceDocumentSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
         void _WorkspaceDocumentTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& args);
@@ -508,6 +510,7 @@ namespace winrt::TerminalApp::implementation
         void _OpenNewWindow(const Microsoft::Terminal::Settings::Model::INewContentArgs& contentArgs);
 
         void _OpenNewTerminalViaDropdown(const Microsoft::Terminal::Settings::Model::NewTerminalArgs newTerminalArgs);
+        void _ResolveProfileForElevation(const Microsoft::Terminal::Settings::Model::NewTerminalArgs& newTerminalArgs);
 
         bool _displayingCloseDialog{ false };
         void _SettingsButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);

@@ -352,9 +352,9 @@ namespace winrt::TerminalApp::implementation
         const auto canDragDrop = CanDragDrop();
 
         _tabView.CanReorderTabs(canDragDrop);
-        // Reordering stays available within a workspace. Dragging a tab out
-        // would create a physical window, so the workspace UI disables it.
-        _tabView.CanDragTabs(false);
+        // TabDragStarting/Completed keep the tab model in sync with WinUI
+        // reordering. Tear-out is disabled separately by omitting its handlers.
+        _tabView.CanDragTabs(canDragDrop);
         _tabView.TabDragStarting({ get_weak(), &TerminalPage::_TabDragStarted });
         _tabView.TabDragCompleted({ get_weak(), &TerminalPage::_TabDragCompleted });
 
@@ -481,11 +481,6 @@ namespace winrt::TerminalApp::implementation
         _tabView.SelectionChanged({ this, &TerminalPage::_OnTabSelectionChanged });
         _tabView.TabCloseRequested({ this, &TerminalPage::_OnTabCloseRequested });
         _tabView.TabItemsChanged({ this, &TerminalPage::_OnTabItemsChanged });
-
-        _tabView.TabDragStarting({ this, &TerminalPage::_onTabDragStarting });
-        _tabView.TabStripDragOver({ this, &TerminalPage::_onTabStripDragOver });
-        _tabView.TabStripDrop({ this, &TerminalPage::_onTabStripDrop });
-        _tabView.TabDroppedOutside({ this, &TerminalPage::_onTabDroppedOutside });
 
         _CreateNewTabFlyout();
 
@@ -1557,18 +1552,7 @@ namespace winrt::TerminalApp::implementation
         auto sessionType = "";
         if (dispatchToElevatedWindow && !debugTap)
         {
-            // Manually fill in the evaluated profile.
-            if (newTerminalArgs.ProfileIndex() != nullptr)
-            {
-                // We want to promote the index to a GUID because there is no "launch to profile index" command.
-                const auto profile = _settings.GetProfileForArgs(newTerminalArgs);
-                if (profile)
-                {
-                    newTerminalArgs.Profile(::Microsoft::Console::Utils::GuidToString(profile.Guid()));
-                    newTerminalArgs.StartingDirectory(_evaluatePathForCwd(profile.EvaluatedStartingDirectory()));
-                }
-            }
-
+            _ResolveProfileForElevation(newTerminalArgs);
             _OpenElevatedWT(newTerminalArgs);
             sessionType = "ElevatedWindow";
         }
@@ -1610,6 +1594,24 @@ namespace winrt::TerminalApp::implementation
     std::wstring TerminalPage::_evaluatePathForCwd(const std::wstring_view path)
     {
         return Utils::EvaluateStartingDirectory(_WindowProperties.VirtualWorkingDirectory(), path);
+    }
+
+    void TerminalPage::_ResolveProfileForElevation(const NewTerminalArgs& newTerminalArgs)
+    {
+        if (newTerminalArgs.ProfileIndex() != nullptr)
+        {
+            // The elevation command line accepts profile GUIDs, not indices.
+            if (const auto profile = _settings.GetProfileForArgs(newTerminalArgs))
+            {
+                newTerminalArgs.Profile(::Microsoft::Console::Utils::GuidToString(profile.Guid()));
+                // A launch directory supplied by the workspace or the caller
+                // takes precedence over the profile's starting directory.
+                if (newTerminalArgs.StartingDirectory().empty())
+                {
+                    newTerminalArgs.StartingDirectory(_evaluatePathForCwd(profile.EvaluatedStartingDirectory()));
+                }
+            }
+        }
     }
 
     // Method Description:
@@ -7218,6 +7220,30 @@ namespace winrt::TerminalApp::implementation
         _UpdateWorkspaceDocumentCaretStatus();
     }
 
+    void TerminalPage::_WorkspaceTerminalGotFocus(const IInspectable&, const RoutedEventArgs& args)
+    {
+        // GotFocus is queued; ignore a notification for a target that has
+        // already lost focus before the event reaches this container.
+        if (args.OriginalSource() == WUX::Input::FocusManager::GetFocusedElement(XamlRoot()))
+        {
+            if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                workspace->preferTerminalInCompactView = true;
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentGotFocus(const IInspectable&, const RoutedEventArgs&)
+    {
+        if (WorkspaceDocumentEditor().FocusState() != FocusState::Unfocused)
+        {
+            if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                workspace->preferTerminalInCompactView = false;
+            }
+        }
+    }
+
     void TerminalPage::_WorkspaceDocumentSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
     {
         if (_updatingDocumentTabs)
@@ -7566,13 +7592,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_WorkspaceHubBackClick(const IInspectable&, const RoutedEventArgs&)
     {
         _ShowWorkspaceContent();
-        if (const auto tab = _GetFocusedTabImpl())
-        {
-            if (const auto content = tab->GetActiveContent())
-            {
-                content.Focus(FocusState::Programmatic);
-            }
-        }
+        _FocusCurrentTab(true);
     }
 
     void TerminalPage::_WorkspaceHubNewClick(const IInspectable&, const RoutedEventArgs&)

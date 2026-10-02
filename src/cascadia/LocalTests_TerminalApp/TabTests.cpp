@@ -122,6 +122,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceBulkClose);
         TEST_METHOD(WorkspaceLaunchArguments);
         TEST_METHOD(TopTabWorkspaceNavigation);
+        TEST_METHOD(WorkspaceTabDragReorder);
         TEST_METHOD(WorkspaceTabActivation);
         TEST_METHOD(WorkspaceSurfaceDimensions);
         TEST_METHOD(WorkspaceTabSwitcherModes);
@@ -133,6 +134,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceHeaderRestorationAndThemeReload);
         TEST_METHOD(WorkspaceCloseSelectedMruTab);
         TEST_METHOD(WorkspaceCompactViewRestoration);
+        TEST_METHOD(WorkspaceCompactPaneFocus);
         TEST_METHOD(WorkspacePreviewFocusOnClose);
         TEST_METHOD(WorkspacePreviewThemeChanges);
         TEST_METHOD(WorkspaceNavigationCloseButtonHover);
@@ -872,6 +874,29 @@ namespace TerminalAppLocalTests
             // The default new-tab path has no content arguments.
             VERIFY_SUCCEEDED(page->_OpenNewTab(nullptr));
             VERIFY_ARE_EQUAL(folderB, page->_GetFocusedTabImpl()->GetActiveTerminalControl().Settings().StartingDirectory());
+
+            // Ctrl-launching a menu profile resolves its index to a GUID after
+            // the dropdown has supplied the workspace's launch directory.
+            const auto profile = page->_settings.ActiveProfiles().GetAt(0);
+            profile.StartingDirectory(folderA);
+            NewTerminalArgs menuArgs{ 0 };
+            page->_OpenNewTerminalViaDropdown(menuArgs);
+            VERIFY_ARE_EQUAL(folderB, menuArgs.StartingDirectory());
+            page->_ResolveProfileForElevation(menuArgs);
+            VERIFY_IS_FALSE(menuArgs.Profile().empty());
+            VERIFY_ARE_EQUAL(profile.Guid(), page->_settings.GetProfileForArgs(menuArgs).Guid());
+            VERIFY_ARE_EQUAL(folderB, menuArgs.StartingDirectory());
+
+            // Explicit launch directories also survive profile resolution.
+            NewTerminalArgs explicitArgs{ 0 };
+            explicitArgs.StartingDirectory(folderB);
+            page->_ResolveProfileForElevation(explicitArgs);
+            VERIFY_ARE_EQUAL(folderB, explicitArgs.StartingDirectory());
+
+            // Use the evaluated profile directory when none was supplied.
+            NewTerminalArgs profileArgs{ 0 };
+            page->_ResolveProfileForElevation(profileArgs);
+            VERIFY_ARE_EQUAL(folderA, profileArgs.StartingDirectory());
         });
     }
 
@@ -931,6 +956,50 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(2u, presenter->calls);
             VERIFY_IS_TRUE(page->_workspaces.empty());
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceHub().Visibility());
+        });
+    }
+
+    void TabTests::WorkspaceTabDragReorder()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:moveToEnd", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool moveToEnd;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"moveToEnd", moveToEnd));
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(page->_tabView.CanReorderTabs());
+            VERIFY_IS_TRUE(page->_tabView.CanDragTabs());
+            page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterLastTab);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 2 }));
+
+            const auto from = moveToEnd ? 0u : 2u;
+            const auto to = moveToEnd ? 2u : 0u;
+            const auto moved = page->_tabs.GetAt(from);
+            const auto item = moved.TabViewItem();
+            // WinUI reports a reorder as removal and insertion between the
+            // drag notifications. Closing the moved tab must remove its header.
+            page->_TabDragStarted(nullptr, nullptr);
+            page->_tabView.TabItems().RemoveAt(from);
+            page->_tabView.TabItems().InsertAt(to, item);
+            page->_TabDragCompleted(nullptr, nullptr);
+            VERIFY_IS_FALSE(page->_rearranging);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == moved);
+            VERIFY_ARE_EQUAL(to, page->_GetFocusedTabIndex().value());
+            const auto verifyOrder = [&]() {
+                VERIFY_ARE_EQUAL(page->_tabs.Size(), page->_tabView.TabItems().Size());
+                for (uint32_t i = 0; i < page->_tabs.Size(); ++i)
+                {
+                    VERIFY_IS_TRUE(page->_tabs.GetAt(i).TabViewItem() == page->_tabView.TabItems().GetAt(i));
+                }
+            };
+            verifyOrder();
+            moved.Close();
+            VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
+            uint32_t index{};
+            VERIFY_IS_FALSE(page->_tabView.TabItems().IndexOf(item, index));
+            verifyOrder();
         });
     }
 
@@ -1556,6 +1625,15 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
             VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(terminal)->_focusState);
 
+            // Returning from the hub must leave keyboard input in the visible
+            // preview while the terminal column has zero width.
+            page->_ShowWorkspaceHub();
+            page->_WorkspaceHubBackClick(nullptr, nullptr);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+            VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(terminal)->_focusState);
+
             // Activating the already-selected terminal is still an explicit
             // request to show it in compact mode, in either tab-strip layout.
             page->FocusTab(terminal);
@@ -1565,6 +1643,79 @@ namespace TerminalAppLocalTests
             page->_SwitchWorkspace(workspaceA, false);
             VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+        });
+    }
+
+    void TabTests::WorkspaceCompactPaneFocus()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        const wil::unique_handle terminalFocused{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        const wil::unique_handle documentFocused{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        VERIFY_IS_NOT_NULL(terminalFocused.get());
+        VERIFY_IS_NOT_NULL(documentFocused.get());
+        winrt::event_token terminalFocusToken{};
+        winrt::event_token documentFocusToken{};
+        std::filesystem::path file;
+        const auto cleanup = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() {
+                page->_GetActiveControl().GotFocus(terminalFocusToken);
+                page->WorkspaceDocumentEditor().GotFocus(documentFocusToken);
+            });
+            std::error_code error;
+            std::filesystem::remove(file, error);
+        });
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".txt");
+            std::ofstream{ file } << "pane focus before compact layout";
+            page->WorkspaceContentArea().Width(1000);
+            page->UpdateLayout();
+            terminalFocusToken = page->_GetActiveControl().GotFocus([event = terminalFocused.get()](auto&&, auto&&) { SetEvent(event); });
+            documentFocusToken = page->WorkspaceDocumentEditor().GotFocus([event = documentFocused.get()](auto&&, auto&&) { SetEvent(event); });
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(documentFocused.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalInCompactView);
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+            ResetEvent(terminalFocused.get());
+            // Focusing the terminal content directly does not activate a tab.
+            VERIFY_IS_TRUE(page->_GetActiveControl().Focus(FocusState::Pointer));
+        });
+        // GotFocus bubbles asynchronously. Observe the actual transition
+        // before issuing the next user interaction (resizing the window).
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(terminalFocused.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalInCompactView);
+            page->WorkspaceContentArea().Width(480);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(GridUnitType::Star, page->WorkspaceTerminalColumn().Width().GridUnitType);
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->_GetActiveControl().FocusState());
+
+            // Switching focus back to the same preview must update the
+            // preference even though the selected document has not changed.
+            page->WorkspaceContentArea().Width(1000);
+            page->UpdateLayout();
+            ResetEvent(documentFocused.get());
+            VERIFY_IS_TRUE(page->WorkspaceDocumentEditor().Focus(FocusState::Pointer));
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(documentFocused.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalInCompactView);
+            page->WorkspaceContentArea().Width(480);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+            VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetActiveControl().FocusState());
         });
     }
 
