@@ -578,18 +578,28 @@ namespace winrt::TerminalApp::implementation
         // --focusMode on the commandline here, and the mode in the settings.
         // Below, we'll also account for if focus mode was persisted into the
         // session for restoration.
-        bool focusMode = _appArgs && _appArgs->ParsedArgs().GetLaunchMode().value_or(_currentWindowSettings().LaunchMode()) == LaunchMode::FocusMode;
+        const auto launchMode = _appArgs ? _appArgs->ParsedArgs().GetLaunchMode().value_or(_currentWindowSettings().LaunchMode()) : _currentWindowSettings().LaunchMode();
+        bool focusMode = WI_IsFlagSet(launchMode, LaunchMode::FocusMode);
+        bool multipleTabs = false;
+        bool restoredSize = false;
 
         const auto scale = static_cast<float>(dpi) / static_cast<float>(USER_DEFAULT_SCREEN_DPI);
         if (const auto layout = LoadPersistedLayout())
         {
+            if (const auto actions = layout.TabLayout())
+            {
+                multipleTabs = std::count_if(actions.begin(), actions.end(), [](const auto& action) {
+                                   return action.Action() == ShortcutAction::NewTab;
+                               }) > 1;
+            }
             if (layout.LaunchMode())
             {
-                focusMode = layout.LaunchMode().Value() == LaunchMode::FocusMode;
+                focusMode = WI_IsFlagSet(layout.LaunchMode().Value(), LaunchMode::FocusMode);
             }
 
             if (layout.InitialSize())
             {
+                restoredSize = true;
                 proposedSize = layout.InitialSize().Value();
                 // The size is saved as a non-scaled real pixel size,
                 // so we need to scale it appropriately.
@@ -600,6 +610,7 @@ namespace winrt::TerminalApp::implementation
 
         if ((_appArgs && _appArgs->ParsedArgs().GetSize().has_value()) || (proposedSize.Width == 0 && proposedSize.Height == 0))
         {
+            restoredSize = false;
             // Use the default profile to determine how big of a window we need.
             const auto settings{ Settings::TerminalSettings::CreateWithNewTerminalArgs(_settings, _currentWindowSettings(), nullptr) };
 
@@ -622,10 +633,12 @@ namespace winrt::TerminalApp::implementation
             };
         }
 
-        // GH#2061 - If the global setting "Always show tab bar" is
-        // set or if "Show tabs in title bar" is set, then we'll need to add
-        // the height of the tab bar here.
-        if (_currentWindowSettings().ShowTabsInTitlebar() && !focusMode)
+        // Include the header whenever settings keep it visible, including the
+        // workspace button in a single-tab window.
+        const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings());
+        const bool showWorkspacesButton = !theme || !theme.Window() || theme.Window().ShowWorkspacesButton();
+        const bool sideTabs = _currentWindowSettings().TabPosition() == TabPosition::Left;
+        if (!sideTabs && _currentWindowSettings().ShowTabsInTitlebar() && !focusMode)
         {
             // In the past, we used to actually instantiate a TitlebarControl
             // and use Measure() to determine the DesiredSize of the control, to
@@ -643,16 +656,14 @@ namespace winrt::TerminalApp::implementation
             static constexpr auto titlebarHeight = 40;
             proposedSize.Height += (titlebarHeight)*scale;
         }
-        else if (_currentWindowSettings().AlwaysShowTabs() && !focusMode)
+        else if ((_currentWindowSettings().AlwaysShowTabs() || showWorkspacesButton || multipleTabs) && !focusMode)
         {
-            // Same comment as above, but with a TabRowControl.
-            //
-            // A note from before: For whatever reason, there's about 10px of
-            // unaccounted-for space in the application. I couldn't tell you
-            // where these 10px are coming from, but they need to be included in
-            // this math.
-            static constexpr auto tabRowHeight = 32;
-            proposedSize.Height += (tabRowHeight + 10) * scale;
+            // A persisted workspace size excludes exactly the 32-DIP tab row
+            // (or the 40-DIP side-tab header). Retain the legacy 10-DIP margin
+            // only when sizing a fresh terminal from its row/column settings.
+            const auto headerHeight = sideTabs ? 40 : restoredSize ? 32 :
+                                                                     42;
+            proposedSize.Height += headerHeight * scale;
         }
 
         // With side tabs, the tab strip floats over the content in a

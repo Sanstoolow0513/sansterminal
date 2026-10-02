@@ -543,6 +543,7 @@ namespace winrt::TerminalApp::implementation
 
         void _DismissTabContextMenus();
         void _FocusCurrentTab(const bool focusAlways);
+        void _FocusWorkspaceContent(const winrt::TerminalApp::Tab& tab);
         bool _HasMultipleTabs() const;
 
         void _SelectNextTab(const bool bMoveRight, const Windows::Foundation::IReference<Microsoft::Terminal::Settings::Model::TabSwitcherMode>& customTabSwitcherMode);

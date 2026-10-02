@@ -818,6 +818,8 @@ namespace winrt::TerminalApp::implementation
                                          std::any_of(actions.begin(), actions.end(), [](const auto& action) {
                                              return action.Action() == ShortcutAction::OpenWorkspace;
                                          });
+        const bool restoringLayout = restoreLayout || hasWorkspaceMarkers;
+        auto replayWorkspaceId = _activeWorkspaceId.empty() ? winrt::hstring{ L"__untitled_workspace__" } : _activeWorkspaceId;
 
         for (size_t i = 0; i < actions.size(); ++i)
         {
@@ -828,18 +830,28 @@ namespace winrt::TerminalApp::implementation
 
             // Scope the insertion policy to each dispatched action. Interactive
             // commands can run while layout replay yields to the dispatcher.
-            const auto wasRestoringLayout = std::exchange(_restoringLayout, restoreLayout || hasWorkspaceMarkers);
+            const auto wasRestoringLayout = std::exchange(_restoringLayout, restoringLayout);
             const auto restoreInsertionPolicy = wil::scope_exit([&]() noexcept { _restoringLayout = wasRestoringLayout; });
 
             if (hasWorkspaceMarkers && actions[i].Action() == ShortcutAction::OpenWorkspace)
             {
                 if (const auto marker = actions[i].Args().try_as<OpenWorkspaceArgs>())
                 {
-                    _SwitchWorkspace(marker.Name(), false);
+                    if (!marker.Name().empty())
+                    {
+                        replayWorkspaceId = marker.Name();
+                        _SwitchWorkspace(replayWorkspaceId, false);
+                    }
                 }
             }
             else
             {
+                // Activation can change while we yield. Every restored action,
+                // including pane splits, must run in its serialized workspace.
+                if (restoringLayout && _activeWorkspaceId != replayWorkspaceId)
+                {
+                    _SwitchWorkspace(replayWorkspaceId, false);
+                }
                 _actionDispatch->DoAction(actions[i]);
             }
             // Workspace markers do not create a tab. The first real tab must
@@ -850,13 +862,7 @@ namespace winrt::TerminalApp::implementation
         // GH#6586: now that we're done processing all startup commands,
         // focus the active control. This will work as expected for both
         // commandline invocations and for `wt` action invocations.
-        if (const auto& tabImpl{ _GetFocusedTabImpl() })
-        {
-            if (const auto& content{ tabImpl->GetActiveContent() })
-            {
-                content.Focus(FocusState::Programmatic);
-            }
-        }
+        _FocusCurrentTab(true);
     }
 
     safe_void_coroutine TerminalPage::CreateTabFromConnection(ITerminalConnection connection)
@@ -2858,7 +2864,17 @@ namespace winrt::TerminalApp::implementation
             {
                 const auto currentTabIndex = tabIndex.value();
                 const auto delta = direction == MoveTabDirection::Forward ? 1 : -1;
-                _TryMoveTab(currentTabIndex, currentTabIndex + delta);
+                const auto workspaceId = _WorkspaceForTab(_tabs.GetAt(currentTabIndex));
+                for (auto nextTabIndex = gsl::narrow_cast<int32_t>(currentTabIndex) + delta;
+                     nextTabIndex >= 0 && nextTabIndex < gsl::narrow_cast<int32_t>(_tabs.Size());
+                     nextTabIndex += delta)
+                {
+                    if (_WorkspaceForTab(_tabs.GetAt(nextTabIndex)) == workspaceId)
+                    {
+                        _TryMoveTab(currentTabIndex, nextTabIndex);
+                        break;
+                    }
+                }
             }
         }
 
@@ -4221,6 +4237,10 @@ namespace winrt::TerminalApp::implementation
         AlwaysOnTopChanged.raise(*this, nullptr);
 
         _showTabsFullscreen = _currentWindowSettings().ShowTabsFullscreen();
+        // Header visibility depends on this theme property, so apply it before
+        // recomputing the layout.
+        const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings());
+        _tabRow.ShowWorkspacesButton(!theme || !theme.Window() || theme.Window().ShowWorkspacesButton());
         _UpdateTabView();
 
         // Settings AllowDependentAnimations will affect whether animations are
@@ -4229,12 +4249,6 @@ namespace winrt::TerminalApp::implementation
         WUX::Media::Animation::Timeline::AllowDependentAnimations(!_currentWindowSettings().DisableAnimations());
 
         _tabRow.ShowElevationShield(IsRunningElevated() && _currentWindowSettings().ShowAdminShield());
-
-        // Apply the ShowWorkspacesButton theme setting.
-        if (const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings()))
-        {
-            _tabRow.ShowWorkspacesButton(theme.Window() ? theme.Window().ShowWorkspacesButton() : true);
-        }
 
         Media::SolidColorBrush transparent{ Windows::UI::Colors::Transparent() };
         _tabView.Background(transparent);
@@ -6300,6 +6314,14 @@ namespace winrt::TerminalApp::implementation
             _UpdateWorkspaceFilesUI();
         }
         _ResizeWorkspaceFilesColumn();
+
+        // Restore focus after the document surface has been restored as well.
+        // The tab switcher keeps focus while previewing a workspace's tabs.
+        const auto palette = CommandPaletteElement();
+        if (!palette || palette.Visibility() != Visibility::Visible)
+        {
+            _FocusCurrentTab(false);
+        }
 
         if (createTabIfEmpty && isNew)
         {

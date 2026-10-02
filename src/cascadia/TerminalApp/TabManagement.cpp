@@ -238,6 +238,7 @@ namespace winrt::TerminalApp::implementation
         }
         _RefreshWorkspaceNavigation();
         _SyncWorkspaceNavigationSelection();
+        _UpdateTabView();
     }
 
     // Method Description:
@@ -660,6 +661,7 @@ namespace winrt::TerminalApp::implementation
         _RefreshWorkspaceNavigation();
         _SyncWorkspaceNavigationSelection();
         _UpdateWorkspaceDocumentLayout();
+        _UpdateTabView();
     }
 
     // Method Description:
@@ -1271,7 +1273,14 @@ namespace winrt::TerminalApp::implementation
             const auto p = CommandPaletteElement();
             if (!p || p.Visibility() != Visibility::Visible)
             {
-                tab.Focus(FocusState::Programmatic);
+                if (activateTerminal)
+                {
+                    tab.Focus(FocusState::Programmatic);
+                }
+                else
+                {
+                    _FocusWorkspaceContent(tab);
+                }
                 _UpdateMRUTab(tab);
                 _updateAllTabCloseButtons();
             }
@@ -1451,6 +1460,36 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    void TerminalPage::_FocusWorkspaceContent(const winrt::TerminalApp::Tab& tab)
+    {
+        // Passive selection must preserve document focus when both panes are
+        // visible, and must never focus a terminal hidden by compact layout.
+        const auto terminalWidth = WorkspaceTerminalColumn().Width();
+        if (WorkspaceHub().Visibility() == Visibility::Visible)
+        {
+            WorkspaceHubNewButton().Focus(FocusState::Programmatic);
+        }
+        else if (WorkspaceDocumentPanel().Visibility() == Visibility::Visible &&
+                 (!tab || WorkspaceDocumentEditor().FocusState() != FocusState::Unfocused ||
+                  (terminalWidth.GridUnitType == GridUnitType::Pixel && terminalWidth.Value == 0)))
+        {
+            WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+        }
+        else if (tab)
+        {
+            tab.Focus(FocusState::Programmatic);
+            // Tab::Focus handles terminal controls. Other pane content still
+            // needs its own focus handler, as in startup action completion.
+            if (const auto tabImpl = _GetTabImpl(tab); tabImpl && !tabImpl->GetActiveTerminalControl())
+            {
+                if (const auto content = tabImpl->GetActiveContent())
+                {
+                    content.Focus(FocusState::Programmatic);
+                }
+            }
+        }
+    }
+
     void TerminalPage::_FocusCurrentTab(const bool focusAlways)
     {
         // We don't want to set focus on the tab if fly-out is open as it will
@@ -1458,10 +1497,11 @@ namespace winrt::TerminalApp::implementation
         // state, by hooking both Opening and Open events
         if (focusAlways || !_newTabButton.Flyout().IsOpen())
         {
-            // Return focus to the active control
-            if (auto tab{ _GetFocusedTab() })
+            // Return focus to the visible workspace surface.
+            const auto tab = _GetFocusedTab();
+            _FocusWorkspaceContent(tab);
+            if (tab)
             {
-                tab.Focus(FocusState::Programmatic);
                 _UpdateMRUTab(tab);
                 _updateAllTabCloseButtons();
             }

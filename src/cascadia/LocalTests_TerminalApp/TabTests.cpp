@@ -5,6 +5,7 @@
 
 #include "../TerminalApp/TerminalPage.h"
 #include "../TerminalApp/TerminalWindow.h"
+#include "../TerminalApp/SettingsLoadEventArgs.h"
 #include "../TerminalApp/MinMaxCloseControl.h"
 #include "../TerminalApp/TabRowControl.h"
 #include "../TerminalApp/ShortcutActionDispatch.h"
@@ -63,10 +64,11 @@ namespace TerminalAppLocalTests
     struct WorkspaceSettingsContent : winrt::implements<WorkspaceSettingsContent, IPaneContent>, winrt::TerminalApp::implementation::BasicPaneEvents
     {
         Grid root{};
+        FocusState focusState{ FocusState::Unfocused };
         FrameworkElement GetRoot() { return root; }
         void UpdateSettings(const CascadiaSettings&, const WindowSettings&) {}
         winrt::Windows::Foundation::Size MinimumSize() { return { 1, 1 }; }
-        void Focus(FocusState) {}
+        void Focus(FocusState state) { focusState = state; }
         void Close() {}
         INewContentArgs GetNewTerminalArgs(BuildStartupKind) const { return BaseContentArgs{ L"settings" }; }
         winrt::hstring Title() { return L"Settings"; }
@@ -126,8 +128,12 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceSidebarTabColors);
         TEST_METHOD(WorkspaceResizeCallbacks);
         TEST_METHOD(WorkspaceLayoutTabOrder);
+        TEST_METHOD(WorkspaceLayoutReplayOwnership);
+        TEST_METHOD(WorkspaceMoveTabNeighbors);
+        TEST_METHOD(WorkspaceHeaderRestorationAndThemeReload);
         TEST_METHOD(WorkspaceCloseSelectedMruTab);
         TEST_METHOD(WorkspaceCompactViewRestoration);
+        TEST_METHOD(WorkspacePreviewFocusOnClose);
         TEST_METHOD(WorkspacePreviewThemeChanges);
         TEST_METHOD(WorkspaceNavigationCloseButtonHover);
 
@@ -939,7 +945,8 @@ namespace TerminalAppLocalTests
         TestOnUIThread([&]() {
             const auto workspaceA = page->_activeWorkspaceId;
             const auto terminalA = page->_GetFocusedTab();
-            page->_settingsTab = page->_CreateNewTabFromPane(std::make_shared<Pane>(winrt::make<WorkspaceSettingsContent>()));
+            const auto settingsContent = winrt::make_self<WorkspaceSettingsContent>();
+            page->_settingsTab = page->_CreateNewTabFromPane(std::make_shared<Pane>(*settingsContent));
             const auto settings = page->_settingsTab;
             page->_SwitchWorkspace(L"activation-test-B");
             const auto terminalB = page->_GetFocusedTab();
@@ -949,6 +956,8 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_GetFocusedTab() == settings);
             VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(0) == settings.Content());
             VERIFY_ARE_EQUAL(Visibility::Collapsed, terminalB.TabViewItem().Visibility());
+            page->ProcessStartupActions({}, {}, {});
+            VERIFY_ARE_EQUAL(FocusState::Programmatic, settingsContent->focusState);
 
             // TabView selection and the asynchronous pane-move focus path
             // must also activate the selected tab's owning workspace.
@@ -1246,6 +1255,239 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::WorkspaceLayoutReplayOwnership()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:markers", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        bool markers;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"markers", markers));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        const wil::unique_handle completed{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        VERIFY_IS_NOT_NULL(completed.get());
+        winrt::event_token newTabToken{}, splitToken{}, completionToken{};
+        int64_t labelToken{};
+        winrt::hstring restoredWorkspace;
+        uint32_t userSwitches = 0;
+        bool markerInterrupted = false;
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            restoredWorkspace = winrt::to_hstring(unique);
+            const auto interactiveWorkspace = page->_activeWorkspaceId;
+            const auto queueUserSwitch = [&, interactiveWorkspace]() {
+                page->Dispatcher().RunAsync(CoreDispatcherPriority::Normal, [&, interactiveWorkspace]() {
+                    VERIFY_IS_FALSE(page->_restoringLayout);
+                    page->_SwitchWorkspace(interactiveWorkspace, false);
+                    ++userSwitches;
+                });
+            };
+            // Interrupt the marker (or legacy workspace activation) before
+            // the first NewTab resumes, then interrupt between later actions.
+            labelToken = page->WorkspaceHeaderName().RegisterPropertyChangedCallback(TextBlock::TextProperty(), [&, queueUserSwitch](auto&&, auto&&) {
+                if (!markerInterrupted && page->WorkspaceHeaderName().Text() == restoredWorkspace)
+                {
+                    markerInterrupted = true;
+                    queueUserSwitch();
+                }
+            });
+            newTabToken = page->_actionDispatch->NewTab([queueUserSwitch](auto&&, auto&&) { queueUserSwitch(); });
+            splitToken = page->_actionDispatch->SplitPane([queueUserSwitch](auto&&, auto&&) { queueUserSwitch(); });
+            completionToken = page->_actionDispatch->SwitchToTab([event = completed.get()](auto&&, auto&&) { SetEvent(event); });
+            std::vector<ActionAndArgs> actions;
+            if (markers)
+            {
+                actions.emplace_back(ShortcutAction::OpenWorkspace, OpenWorkspaceArgs{ restoredWorkspace });
+            }
+            actions.emplace_back(ShortcutAction::NewTab, NewTabArgs{ NewTerminalArgs{ 1 } });
+            actions.emplace_back(ShortcutAction::SplitPane, SplitPaneArgs{ SplitType::Duplicate });
+            actions.emplace_back(ShortcutAction::NewTab, NewTabArgs{ NewTerminalArgs{ 3 } });
+            actions.emplace_back(ShortcutAction::SwitchToTab, SwitchToTabArgs{ uint32_t{ 0 } });
+            WindowLayout layout;
+            layout.TabLayout(winrt::single_threaded_vector<ActionAndArgs>(std::move(actions)));
+            ApplicationState::SharedInstance().SaveWorkspace(restoredWorkspace, layout);
+            page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterCurrentTab);
+            page->_OpenWorkspace(restoredWorkspace);
+        });
+        const auto revoke = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() {
+                page->WorkspaceHeaderName().UnregisterPropertyChangedCallback(TextBlock::TextProperty(), labelToken);
+                page->_actionDispatch->NewTab(newTabToken);
+                page->_actionDispatch->SplitPane(splitToken);
+                page->_actionDispatch->SwitchToTab(completionToken);
+            });
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(completed.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(markerInterrupted);
+            VERIFY_ARE_EQUAL(4u, userSwitches);
+            VERIFY_ARE_EQUAL(3u, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(restoredWorkspace, page->_WorkspaceForTab(page->_tabs.GetAt(1)));
+            VERIFY_ARE_EQUAL(restoredWorkspace, page->_WorkspaceForTab(page->_tabs.GetAt(2)));
+            VERIFY_ARE_EQUAL(1, page->_GetTabImpl(page->_tabs.GetAt(0))->GetLeafPaneCount());
+            VERIFY_ARE_EQUAL(2, page->_GetTabImpl(page->_tabs.GetAt(1))->GetLeafPaneCount());
+            VERIFY_ARE_EQUAL(L"Profile 3", page->_tabs.GetAt(2).Title());
+            VERIFY_ARE_EQUAL(restoredWorkspace, page->_activeWorkspaceId);
+            VERIFY_ARE_EQUAL(1u, page->_GetFocusedTabIndex().value());
+            VERIFY_IS_FALSE(page->_restoringLayout);
+        });
+    }
+
+    void TabTests::WorkspaceMoveTabNeighbors()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"IsolationLevel", L"Method")
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterLastTab);
+            const auto workspaceA = page->_activeWorkspaceId;
+            const auto a1 = page->_GetFocusedTab();
+            page->_SwitchWorkspace(L"move-neighbors-B");
+            const auto b1 = page->_GetFocusedTab();
+            page->_SwitchWorkspace(workspaceA, false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            const auto a2 = page->_GetFocusedTab();
+            page->_SwitchWorkspace(L"move-neighbors-C");
+            page->_SwitchWorkspace(L"move-neighbors-B", false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 2 }));
+            const auto b2 = page->_GetFocusedTab();
+            const auto verifyOrder = [&](const winrt::hstring& workspaceId, const auto& first, const auto& second) {
+                std::vector<winrt::TerminalApp::Tab> tabs;
+                for (const auto& tab : page->_tabs)
+                {
+                    if (page->_WorkspaceForTab(tab) == workspaceId)
+                    {
+                        tabs.push_back(tab);
+                    }
+                }
+                VERIFY_ARE_EQUAL(2u, tabs.size());
+                VERIFY_IS_TRUE(tabs[0] == first);
+                VERIFY_IS_TRUE(tabs[1] == second);
+                if (sideTabs)
+                {
+                    const auto children = page->_FindWorkspace(workspaceId)->navigationNode.Children();
+                    for (const auto& entry : page->_workspaceNavigationEntries)
+                    {
+                        if (entry.tab == first)
+                        {
+                            VERIFY_IS_TRUE(children.GetAt(0) == entry.node);
+                        }
+                        if (entry.tab == second)
+                        {
+                            VERIFY_IS_TRUE(children.GetAt(1) == entry.node);
+                        }
+                    }
+                }
+                for (uint32_t i = 0; i < page->_tabs.Size(); ++i)
+                {
+                    VERIFY_IS_TRUE(page->_tabs.GetAt(i).TabViewItem() == page->_tabView.TabItems().GetAt(i));
+                }
+            };
+            VERIFY_IS_TRUE(page->_tabs.GetAt(0) == a1);
+            VERIFY_IS_TRUE(page->_tabs.GetAt(1) == b1);
+            VERIFY_IS_TRUE(page->_tabs.GetAt(2) == a2);
+            page->FocusTab(a1);
+            VERIFY_IS_TRUE(page->_MoveTab(page->_GetTabImpl(a1), MoveTabArgs{ L"", MoveTabDirection::Forward }));
+            verifyOrder(workspaceA, a2, a1);
+            verifyOrder(L"move-neighbors-B", b1, b2);
+            VERIFY_IS_TRUE(page->_MoveTab(page->_GetTabImpl(a1), MoveTabArgs{ L"", MoveTabDirection::Backward }));
+            verifyOrder(workspaceA, a1, a2);
+
+            // Workspace boundaries are no-ops even when global neighbors exist.
+            const std::vector<winrt::TerminalApp::Tab> before{ page->_tabs.begin(), page->_tabs.end() };
+            page->_MoveTab(page->_GetTabImpl(a1), MoveTabArgs{ L"", MoveTabDirection::Backward });
+            page->_MoveTab(page->_GetTabImpl(a2), MoveTabArgs{ L"", MoveTabDirection::Forward });
+            VERIFY_IS_TRUE(before == std::vector<winrt::TerminalApp::Tab>(page->_tabs.begin(), page->_tabs.end()));
+            page->_MoveTab(page->_GetTabImpl(b1), MoveTabArgs{ L"", MoveTabDirection::Forward });
+            verifyOrder(L"move-neighbors-B", b2, b1);
+            verifyOrder(workspaceA, a1, a2);
+            page->_MoveTab(page->_GetTabImpl(b1), MoveTabArgs{ L"", MoveTabDirection::Backward });
+            verifyOrder(L"move-neighbors-B", b1, b2);
+        });
+    }
+
+    void TabTests::WorkspaceHeaderRestorationAndThemeReload()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:focusMode", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:dpi", L"{96, 144}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        bool focusMode;
+        uint32_t dpi;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"focusMode", focusMode));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"dpi", dpi));
+        CascadiaSettings settings{ LR"({
+            "showTabsInTitlebar": false, "alwaysShowTabs": false,
+            "theme": "header-test",
+            "themes": [
+                { "name": "header-test", "window": { "showWorkspacesButton": false } },
+                { "name": "header-shown", "window": { "showWorkspacesButton": true } }
+            ],
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{ "name": "Header test", "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}", "closeOnExit": "never" }]
+        })",
+                                   {} };
+        settings.WindowSettings(L"").TabPosition(sideTabs ? TabPosition::Left : TabPosition::Top);
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+        TestOnUIThread([&]() {
+            page->Width(1000);
+            page->Height(800);
+            page->_isInFocusMode = focusMode;
+            const auto loadResult = winrt::make<winrt::TerminalApp::implementation::SettingsLoadEventArgs>(false, S_OK, L"", nullptr, settings);
+            const auto window = winrt::make_self<winrt::TerminalApp::implementation::TerminalWindow>(loadResult, *_contentManager);
+            const auto scale = static_cast<float>(dpi) / USER_DEFAULT_SCREEN_DPI;
+            for (const bool showButton : { false, true, false })
+            {
+                settings.WindowSettings(L"").Theme(ThemePair{ showButton ? L"header-shown" : L"header-test" });
+                page->SetSettings(settings, true);
+                page->UpdateLayout();
+                VERIFY_ARE_EQUAL(showButton, page->_tabRow.ShowWorkspacesButton());
+                const auto expectedVisibility = showButton && !focusMode ? Visibility::Visible : Visibility::Collapsed;
+                VERIFY_ARE_EQUAL(expectedVisibility, sideTabs ? page->WorkspaceHeader().Visibility() : page->_tabView.Visibility());
+
+                // Feed each restored size back into persistence. Neither DPI
+                // scaling nor repeated launches should change the client size.
+                for (auto restart = 0; restart < 2; ++restart)
+                {
+                    page->_isMaximized = restart != 0;
+                    window->SetPersistedLayout(page->GetWindowLayout());
+                    const auto dimensions = window->GetLaunchDimensions(dpi);
+                    VERIFY_ARE_EQUAL(1000.0f * scale, dimensions.Width);
+                    VERIFY_ARE_EQUAL(800.0f * scale, dimensions.Height);
+                    page->Height(dimensions.Height / scale);
+                    page->UpdateLayout();
+                }
+            }
+
+            // Multiple terminals or workspaces also keep the header visible
+            // when the theme disables the workspace button.
+            VERIFY_SUCCEEDED(page->_OpenNewTab(nullptr));
+            for (const bool anotherWorkspace : { false, true })
+            {
+                if (anotherWorkspace)
+                {
+                    page->_SwitchWorkspace(L"header-restoration-B");
+                }
+                page->UpdateLayout();
+                const auto expectedVisibility = focusMode ? Visibility::Collapsed : Visibility::Visible;
+                VERIFY_ARE_EQUAL(expectedVisibility, sideTabs ? page->WorkspaceHeader().Visibility() : page->_tabView.Visibility());
+                window->SetPersistedLayout(page->GetWindowLayout());
+                VERIFY_ARE_EQUAL(800.0f * scale, window->GetLaunchDimensions(dpi).Height);
+            }
+        });
+    }
+
     void TabTests::WorkspaceCloseSelectedMruTab()
     {
         BEGIN_TEST_METHOD_PROPERTIES()
@@ -1311,6 +1553,8 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
             VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
             VERIFY_IS_TRUE(page->_GetFocusedTab() == terminal);
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+            VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(terminal)->_focusState);
 
             // Activating the already-selected terminal is still an explicit
             // request to show it in compact mode, in either tab-strip layout.
@@ -1321,6 +1565,59 @@ namespace TerminalAppLocalTests
             page->_SwitchWorkspace(workspaceA, false);
             VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+        });
+    }
+
+    void TabTests::WorkspacePreviewFocusOnClose()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:compact", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        bool compact;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"compact", compact));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".txt");
+            const auto cleanup = wil::scope_exit([&]() noexcept {
+                std::error_code error;
+                std::filesystem::remove(file, error);
+            });
+            std::ofstream{ file } << "focused preview";
+            const auto selected = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            const auto remaining = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 2 }));
+            const auto background = page->_GetFocusedTab();
+            page->FocusTab(selected);
+            page->WorkspaceContentArea().Width(compact ? 480 : 1000);
+            page->UpdateLayout();
+            page->_OpenWorkspaceDocument(file, true);
+            const auto verifyPreviewFocus = [&]() {
+                VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+                VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+                for (const auto& tab : page->_tabs)
+                {
+                    VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(tab)->_focusState);
+                }
+                if (compact)
+                {
+                    VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+                }
+            };
+            background.Close();
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == selected);
+            verifyPreviewFocus();
+            selected.Close();
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == remaining);
+            verifyPreviewFocus();
+            remaining.Close();
+            VERIFY_IS_NULL(page->_GetFocusedTab());
+            verifyPreviewFocus();
         });
     }
 
