@@ -669,41 +669,44 @@ namespace winrt::TerminalApp::implementation
         {
             return;
         }
-        const auto index{ _GetFocusedTabIndex().value_or(0) };
-        if (_workspaces.size() > 1)
+        std::vector<winrt::TerminalApp::Tab> tabs;
+        std::vector<winrt::TerminalApp::Tab> mruTabs;
+        for (const auto& tab : _tabs)
         {
-            std::vector<uint32_t> visibleTabs;
-            for (uint32_t i = 0; i < _tabs.Size(); ++i)
+            if (_IsTabInActiveWorkspace(tab))
             {
-                if (_IsTabInActiveWorkspace(_tabs.GetAt(i)))
-                {
-                    visibleTabs.push_back(i);
-                }
+                tabs.push_back(tab);
             }
-            if (!visibleTabs.empty())
-            {
-                const auto current = std::find(visibleTabs.begin(), visibleTabs.end(), index);
-                const auto position = current == visibleTabs.end() ? 0 : static_cast<size_t>(std::distance(visibleTabs.begin(), current));
-                const auto next = (position + (bMoveRight ? 1 : visibleTabs.size() - 1)) % visibleTabs.size();
-                _SelectTab(visibleTabs[next]);
-            }
+        }
+        if (tabs.empty())
+        {
             return;
         }
+        for (const auto& tab : _mruTabs)
+        {
+            if (_IsTabInActiveWorkspace(tab))
+            {
+                mruTabs.push_back(tab);
+            }
+        }
+        const auto current = std::find(tabs.begin(), tabs.end(), _GetFocusedTab());
+        const auto index = current == tabs.end() ? 0u : static_cast<uint32_t>(std::distance(tabs.begin(), current));
         const auto tabSwitchMode = customTabSwitcherMode ? customTabSwitcherMode.Value() : _currentWindowSettings().TabSwitcherMode();
         if (tabSwitchMode == TabSwitcherMode::Disabled)
         {
-            auto tabCount = _tabs.Size();
+            const auto tabCount = static_cast<uint32_t>(tabs.size());
             // Wraparound math. By adding tabCount and then calculating
             // modulo tabCount, we clamp the values to the range [0,
             // tabCount) while still supporting moving leftward from 0 to
             // tabCount - 1.
             const auto newTabIndex = ((tabCount + index + (bMoveRight ? 1 : -1)) % tabCount);
-            _SelectTab(newTabIndex);
+            FocusTab(tabs[newTabIndex]);
         }
         else
         {
             const auto p = LoadCommandPalette();
-            p.SetTabs(_tabs, _mruTabs);
+            p.SetTabs(winrt::single_threaded_observable_vector<winrt::TerminalApp::Tab>(std::move(tabs)),
+                      winrt::single_threaded_observable_vector<winrt::TerminalApp::Tab>(std::move(mruTabs)));
 
             // Otherwise, set up the tab switcher in the selected mode, with
             // the given ordering, and make it visible.
@@ -873,7 +876,15 @@ namespace winrt::TerminalApp::implementation
             uint32_t tabIndex{};
             if (_tabs.IndexOf(tab, tabIndex))
             {
+                if (!_IsTabInActiveWorkspace(tab))
+                {
+                    _SwitchWorkspace(_WorkspaceForTab(tab), false);
+                }
                 _tabView.SelectedItem(tab.TabViewItem());
+                if (_tabPosition == TabPosition::Left)
+                {
+                    _UpdatedSelectedTab(tab);
+                }
             }
         }
     }
@@ -1297,13 +1308,15 @@ namespace winrt::TerminalApp::implementation
         if (!_rearranging && !_removing && !_changingWorkspace)
         {
             auto tabView = sender.as<MUX::Controls::TabView>();
-            auto selectedIndex = tabView.SelectedIndex();
-            if (selectedIndex >= 0 && selectedIndex < gsl::narrow_cast<int32_t>(_tabs.Size()))
+            if (const auto tab = _GetTabByTabViewItem(tabView.SelectedItem()))
             {
-                const auto tab{ _tabs.GetAt(selectedIndex) };
                 if (_IsTabInActiveWorkspace(tab))
                 {
                     _UpdatedSelectedTab(tab);
+                }
+                else
+                {
+                    FocusTab(tab);
                 }
             }
         }

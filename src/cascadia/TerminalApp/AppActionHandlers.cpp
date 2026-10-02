@@ -708,14 +708,55 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto activeTab{ _senderOrFocusedTab(sender) })
         {
-            if (!_tabColorPicker)
-            {
-                _tabColorPicker = winrt::make<ColorPickupFlyout>();
-            }
-
-            activeTab->AttachColorPicker(_tabColorPicker);
+            _ShowTabColorPicker(*activeTab);
         }
         args.Handled(true);
+    }
+
+    safe_void_coroutine TerminalPage::_ShowTabColorPicker(winrt::TerminalApp::Tab tab)
+    {
+        const auto weakThis = get_weak();
+        if (_tabPosition == TabPosition::Left)
+        {
+            if (const auto workspace = _FindWorkspace(_WorkspaceForTab(tab)))
+            {
+                workspace->navigationNode.IsExpanded(true);
+            }
+            // TreeView updates its containers asynchronously after expansion.
+            co_await wil::resume_foreground(Dispatcher());
+        }
+        if (const auto page = weakThis.get())
+        {
+            uint32_t index{};
+            if (!page->_tabs.IndexOf(tab, index))
+            {
+                co_return;
+            }
+            FrameworkElement target = tab.TabViewItem();
+            if (page->_tabPosition == TabPosition::Left)
+            {
+                page->_SyncWorkspaceNavigationSelection();
+                page->WorkspaceNavigation().UpdateLayout();
+                // Keep a visible anchor even if the tab is outside the viewport.
+                target = page->WorkspaceNavigation();
+                for (const auto& entry : page->_workspaceNavigationEntries)
+                {
+                    if (entry.tab == tab)
+                    {
+                        if (const auto item = page->WorkspaceNavigation().ContainerFromNode(entry.node).try_as<FrameworkElement>())
+                        {
+                            target = item;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!page->_tabColorPicker)
+            {
+                page->_tabColorPicker = winrt::make<ColorPickupFlyout>();
+            }
+            page->_GetTabImpl(tab)->AttachColorPicker(page->_tabColorPicker, target);
+        }
     }
 
     void TerminalPage::_HandleRenameTab(const IInspectable& sender,

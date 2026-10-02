@@ -1141,6 +1141,9 @@
 如需了解所有可用选项，请运行 "wt new-tab --help"。</value>
     <comment>{Locked="wt","new-tab","-p","-d","--help"}</comment>
   </data>
+  <data name="ActivateWorkspaceButton" xml:space="preserve">
+    <value>切换到此工作区</value>
+  </data>
   <data name="CloseWorkspaceButton" xml:space="preserve">
     <value>关闭工作区</value>
   </data>

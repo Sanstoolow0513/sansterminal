@@ -10,6 +10,7 @@
 #include "../TerminalApp/ShortcutActionDispatch.h"
 #include "../TerminalApp/Tab.h"
 #include "../TerminalApp/CommandPalette.h"
+#include "../TerminalApp/CommandPaletteItems.h"
 #include "../TerminalApp/ContentManager.h"
 #include "../TerminalApp/TerminalSettingsCache.h"
 #include "CppWinrtTailored.h"
@@ -57,6 +58,26 @@ namespace TerminalAppLocalTests
         }
     };
 
+    // Settings navigation uses the same Tab/Pane interfaces as other content.
+    // Keep this test independent of the settings application's resource setup.
+    struct WorkspaceSettingsContent : winrt::implements<WorkspaceSettingsContent, IPaneContent>, winrt::TerminalApp::implementation::BasicPaneEvents
+    {
+        Grid root{};
+        FrameworkElement GetRoot() { return root; }
+        void UpdateSettings(const CascadiaSettings&, const WindowSettings&) {}
+        winrt::Windows::Foundation::Size MinimumSize() { return { 1, 1 }; }
+        void Focus(FocusState) {}
+        void Close() {}
+        INewContentArgs GetNewTerminalArgs(BuildStartupKind) const { return BaseContentArgs{ L"settings" }; }
+        winrt::hstring Title() { return L"Settings"; }
+        uint64_t TaskbarState() { return 0; }
+        uint64_t TaskbarProgress() { return 0; }
+        bool ReadOnly() { return false; }
+        winrt::hstring Icon() const { return L"\xE713"; }
+        winrt::Windows::Foundation::IReference<winrt::Windows::UI::Color> TabColor() const noexcept { return nullptr; }
+        Media::Brush BackgroundBrush() { return nullptr; }
+    };
+
     // TODO:microsoft/terminal#3838:
     // Unfortunately, these tests _WILL NOT_ work in our CI. We're waiting for
     // an updated TAEF that will let us install framework packages when the test
@@ -99,6 +120,10 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceBulkClose);
         TEST_METHOD(WorkspaceLaunchArguments);
         TEST_METHOD(TopTabWorkspaceNavigation);
+        TEST_METHOD(WorkspaceTabActivation);
+        TEST_METHOD(WorkspaceSurfaceDimensions);
+        TEST_METHOD(WorkspaceTabSwitcherModes);
+        TEST_METHOD(WorkspaceSidebarTabColors);
 
         TEST_METHOD(CreateTerminalPage);
 
@@ -136,7 +161,7 @@ namespace TerminalAppLocalTests
     private:
         void _initializeTerminalPage(winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage>& page,
                                      CascadiaSettings initialSettings);
-        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> _commonSetup();
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> _commonSetup(TabPosition position = TabPosition::Top);
         winrt::com_ptr<winrt::TerminalApp::implementation::WindowProperties> _windowProperties;
         winrt::com_ptr<winrt::TerminalApp::implementation::ContentManager> _contentManager;
     };
@@ -853,7 +878,8 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Visibility::Visible, row->WorkspaceSwitcher().Visibility());
             VERIFY_ARE_EQUAL(2u, row->WorkspaceSwitcherFlyout().Items().Size());
             const auto activate = [&](uint32_t index) {
-                const auto item = row->WorkspaceSwitcherFlyout().Items().GetAt(index).as<MenuFlyoutItem>();
+                const auto workspace = row->WorkspaceSwitcherFlyout().Items().GetAt(index).as<MenuFlyoutSubItem>();
+                const auto item = workspace.Items().GetAt(0).as<MenuFlyoutItem>();
                 const Automation::Peers::MenuFlyoutItemAutomationPeer peer{ item };
                 peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
             };
@@ -866,6 +892,245 @@ namespace TerminalAppLocalTests
             activate(1);
             VERIFY_ARE_EQUAL(L"top-navigation-B", page->_activeWorkspaceId);
             VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
+
+            const auto presenter = winrt::make_self<WorkspaceDialogPresenter>();
+            page->_dialogPresenter = winrt::make_weak(presenter.as<winrt::TerminalApp::IDialogPresenter>());
+            const auto close = [&]() {
+                const auto workspace = row->WorkspaceSwitcherFlyout().Items().GetAt(1).as<MenuFlyoutSubItem>();
+                const auto item = workspace.Items().GetAt(1).as<MenuFlyoutItem>();
+                const Automation::Peers::MenuFlyoutItemAutomationPeer peer{ item };
+                peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+            };
+            close();
+            VERIFY_ARE_EQUAL(1u, presenter->calls);
+            VERIFY_IS_NOT_NULL(page->_FindWorkspace(L"top-navigation-B"));
+            presenter->result = ContentDialogResult::Primary;
+            close();
+            VERIFY_ARE_EQUAL(2u, presenter->calls);
+            VERIFY_IS_NULL(page->_FindWorkspace(L"top-navigation-B"));
+            VERIFY_ARE_EQUAL(untitled, page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == terminal);
+            VERIFY_ARE_EQUAL(1u, row->WorkspaceSwitcherFlyout().Items().Size());
+
+            terminal.Close();
+            const auto last = row->WorkspaceSwitcherFlyout().Items().GetAt(0).as<MenuFlyoutSubItem>().Items().GetAt(1).as<MenuFlyoutItem>();
+            const Automation::Peers::MenuFlyoutItemAutomationPeer peer{ last };
+            peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+            VERIFY_ARE_EQUAL(2u, presenter->calls);
+            VERIFY_IS_TRUE(page->_workspaces.empty());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceHub().Visibility());
+        });
+    }
+
+    void TabTests::WorkspaceTabActivation()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            const auto workspaceA = page->_activeWorkspaceId;
+            const auto terminalA = page->_GetFocusedTab();
+            page->_settingsTab = page->_CreateNewTabFromPane(std::make_shared<Pane>(winrt::make<WorkspaceSettingsContent>()));
+            const auto settings = page->_settingsTab;
+            page->_SwitchWorkspace(L"activation-test-B");
+            const auto terminalB = page->_GetFocusedTab();
+
+            page->OpenSettingsUI();
+            VERIFY_ARE_EQUAL(workspaceA, page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == settings);
+            VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(0) == settings.Content());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, terminalB.TabViewItem().Visibility());
+
+            // TabView selection and the asynchronous pane-move focus path
+            // must also activate the selected tab's owning workspace.
+            page->_tabView.SelectedItem(terminalB.TabViewItem());
+            if (sideTabs)
+            {
+                // The hidden TabView does not realize items or raise its
+                // selection event. Exercise the event handler explicitly.
+                page->_OnTabSelectionChanged(page->_tabView, nullptr);
+            }
+            VERIFY_ARE_EQUAL(L"activation-test-B", page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(0) == terminalB.Content());
+            page->_SetFocusedTab(terminalA);
+            VERIFY_ARE_EQUAL(workspaceA, page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == terminalA);
+            VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(0) == terminalA.Content());
+
+            page->FocusTab(terminalB);
+            MovePaneArgs args{ page->_GetTabIndex(terminalA).value(), L"" };
+            VERIFY_IS_TRUE(page->_MovePane(args));
+            VERIFY_ARE_EQUAL(workspaceA, page->_activeWorkspaceId);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == terminalA);
+            VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(0) == terminalA.Content());
+            VERIFY_ARE_EQUAL(2, page->_GetTabImpl(terminalA)->GetLeafPaneCount());
+        });
+    }
+
+    void TabTests::WorkspaceSurfaceDimensions()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto root = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / winrt::to_hstring(unique).c_str();
+            std::filesystem::create_directories(root);
+            const auto cleanup = wil::scope_exit([&]() noexcept {
+                std::error_code error;
+                std::filesystem::remove_all(root, error);
+            });
+            const auto file = root / L"dimensions.txt";
+            std::ofstream{ file } << "workspace dimensions";
+            const winrt::hstring id{ root.native() };
+            page->Width(1400);
+            page->Height(850);
+            page->UpdateLayout();
+            page->_SwitchWorkspace(id);
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+            const auto verifySize = [&]() {
+                const auto size = page->GetWindowLayout().InitialSize().Value();
+                VERIFY_ARE_EQUAL(static_cast<float>(page->SideTabLayout().ActualWidth()), size.Width);
+                VERIFY_ARE_EQUAL(static_cast<float>(page->SideTabLayout().ActualHeight()), size.Height);
+                VERIFY_IS_TRUE(size.Width > page->_tabContent.ActualWidth());
+            };
+            verifySize();
+            page->_FindWorkspace(id)->explorerWidth = 700;
+            page->_ResizeWorkspaceFilesColumn();
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(700.0, page->WorkspaceFilesColumn().ActualWidth());
+
+            page->Width(600);
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(page->WorkspaceContentArea().ActualWidth() > 0);
+            VERIFY_IS_TRUE(page->SideTabColumn().ActualWidth() + page->WorkspaceFilesColumn().ActualWidth() < 600);
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(0.0, page->_tabContent.ActualWidth());
+            verifySize();
+
+            page->_SwitchWorkspace(L"dimensions-test-other", false);
+            // An inactive workspace can retain its width from a larger window.
+            page->_FindWorkspace(id)->explorerWidth = 900;
+            page->_SwitchWorkspace(id, false);
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(page->WorkspaceContentArea().ActualWidth() > 0);
+            VERIFY_IS_TRUE(page->_FindWorkspace(id)->explorerWidth < 900);
+            verifySize();
+
+            if (sideTabs)
+            {
+                page->_ResizeSideTabColumn(280);
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->WorkspaceContentArea().ActualWidth() > 0);
+            }
+        });
+    }
+
+    void TabTests::WorkspaceTabSwitcherModes()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            page->_settings.WindowSettingsDefaults().TabSwitcherMode(TabSwitcherMode::MostRecentlyUsed);
+            const auto first = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(nullptr));
+            const auto second = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(nullptr));
+            const auto third = page->_GetFocusedTab();
+            page->FocusTab(first);
+            page->_SwitchWorkspace(L"switcher-test-B");
+            page->FocusTab(second);
+
+            page->_SelectNextTab(true, nullptr);
+            const auto palette = winrt::get_self<winrt::TerminalApp::implementation::CommandPalette>(page->CommandPaletteElement());
+            VERIFY_ARE_EQUAL(TabSwitcherMode::MostRecentlyUsed, palette->_tabSwitcherMode);
+            VERIFY_ARE_EQUAL(3u, palette->_tabActions.Size());
+            VERIFY_ARE_EQUAL(3u, palette->_mruTabActions.Size());
+            const auto tabAt = [](const auto& actions, uint32_t index) {
+                return winrt::get_self<winrt::TerminalApp::implementation::TabPaletteItem>(actions.GetAt(index).Item().template as<winrt::TerminalApp::TabPaletteItem>())->Tab();
+            };
+            VERIFY_IS_TRUE(tabAt(palette->_mruTabActions, 0) == second);
+            VERIFY_IS_TRUE(tabAt(palette->_mruTabActions, 1) == first);
+            VERIFY_IS_TRUE(tabAt(palette->_mruTabActions, 2) == third);
+
+            page->FocusTab(second);
+            page->_SelectNextTab(true, winrt::box_value(TabSwitcherMode::InOrder).as<winrt::Windows::Foundation::IReference<TabSwitcherMode>>());
+            VERIFY_ARE_EQUAL(TabSwitcherMode::InOrder, palette->_tabSwitcherMode);
+            VERIFY_ARE_EQUAL(1u, palette->_switcherStartIdx);
+            VERIFY_IS_TRUE(tabAt(palette->_tabActions, 0) == first);
+            VERIFY_IS_TRUE(tabAt(palette->_tabActions, 1) == second);
+            VERIFY_IS_TRUE(tabAt(palette->_tabActions, 2) == third);
+
+            page->CommandPaletteElement().Visibility(Visibility::Collapsed);
+            page->_settings.WindowSettingsDefaults().TabSwitcherMode(TabSwitcherMode::Disabled);
+            page->FocusTab(third);
+            page->_SelectNextTab(true, nullptr);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == first);
+            page->_SelectNextTab(false, nullptr);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == third);
+        });
+    }
+
+    void TabTests::WorkspaceSidebarTabColors()
+    {
+        CascadiaSettings settings{ LR"({
+            "tabPosition": "left",
+            "showTabsInTitlebar": false,
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{ "name": "Color test", "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}", "tabColor": "#ffffff", "closeOnExit": "never" }]
+        })",
+                                   {} };
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+        TestOnUIThread([&]() {
+            const auto tab = page->_GetFocusedTabImpl();
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(TabPosition::Left, page->_tabPosition);
+            VERIFY_ARE_EQUAL(1u, page->_workspaceNavigationEntries.size());
+            if (page->_workspaceNavigationEntries.empty())
+            {
+                return;
+            }
+            const auto row = page->_workspaceNavigationEntries.front().node.Content().as<Grid>();
+            const auto title = tab->_headerControl.FindName(L"HeaderTextBlock").as<TextBlock>();
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::White(), row.Background().as<Media::SolidColorBrush>().Color());
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Black(), title.Foreground().as<Media::SolidColorBrush>().Color());
+            const auto close = row.Children().GetAt(2).as<Button>();
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Black(), close.Foreground().as<Media::SolidColorBrush>().Color());
+            tab->SetRuntimeTabColor(winrt::Windows::UI::Colors::Black());
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Black(), row.Background().as<Media::SolidColorBrush>().Color());
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::White(), title.Foreground().as<Media::SolidColorBrush>().Color());
+            page->_OpenNewTab(nullptr);
+            VERIFY_IS_TRUE(std::abs(row.Background().Opacity() - 0.3) < 0.01);
+            page->FocusTab(*tab);
+            VERIFY_ARE_EQUAL(1.0, row.Background().Opacity());
+            tab->ResetRuntimeTabColor();
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::White(), row.Background().as<Media::SolidColorBrush>().Color());
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Black(), title.Foreground().as<Media::SolidColorBrush>().Color());
+
+            page->_FindWorkspace(page->_activeWorkspaceId)->navigationNode.IsExpanded(false);
+            page->_HandleOpenTabColorPicker(*tab, ActionEventArgs{});
+        });
+        TestOnUIThread([&]() {
+            page->UpdateLayout();
+            const auto item = page->WorkspaceNavigation().ContainerFromNode(page->_workspaceNavigationEntries.front().node).try_as<FrameworkElement>();
+            VERIFY_IS_NOT_NULL(item);
+            VERIFY_IS_TRUE(page->_tabColorPicker.Target() == item);
+            VERIFY_IS_NOT_NULL(Media::VisualTreeHelper::GetParent(item));
+            const auto row = page->_workspaceNavigationEntries.front().node.Content().as<Grid>();
+            VERIFY_IS_NOT_NULL(Media::VisualTreeHelper::GetParent(row));
+            const auto title = page->_GetFocusedTabImpl()->_headerControl.FindName(L"HeaderTextBlock").as<TextBlock>();
+            VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Black(), title.Foreground().as<Media::SolidColorBrush>().Color());
+            VERIFY_IS_TRUE(page->_FindWorkspace(page->_activeWorkspaceId)->navigationNode.IsExpanded());
+            page->_tabColorPicker.Hide();
         });
     }
 
@@ -1172,7 +1437,7 @@ namespace TerminalAppLocalTests
     // - <none>
     // Return Value:
     // - The initialized TerminalPage, ready to use.
-    winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> TabTests::_commonSetup()
+    winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> TabTests::_commonSetup(TabPosition position)
     {
         static constexpr std::wstring_view settingsJson0{ LR"(
         {
@@ -1281,6 +1546,7 @@ namespace TerminalAppLocalTests
 
         CascadiaSettings settings0{ settingsJson0, {} };
         VERIFY_IS_NOT_NULL(settings0);
+        settings0.WindowSettings(L"").TabPosition(position);
 
         const auto guid1 = Microsoft::Console::Utils::GuidFromString(L"{6239a42c-1111-49a3-80bd-e8fdd045185c}");
         const auto guid2 = Microsoft::Console::Utils::GuidFromString(L"{6239a42c-2222-49a3-80bd-e8fdd045185c}");

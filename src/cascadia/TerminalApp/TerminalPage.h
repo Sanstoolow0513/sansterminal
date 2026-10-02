@@ -364,6 +364,8 @@ namespace winrt::TerminalApp::implementation
         void _UpdateWorkspaceTabVisibility();
         void _RefreshWorkspaceNavigation();
         void _SyncWorkspaceNavigationSelection();
+        void _WorkspaceNavigationRowLoaded(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceNavigationRowUnloaded(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceNavigationInvoked(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewItemInvokedEventArgs& args);
         Windows::Foundation::IAsyncAction _CloseWorkspace(winrt::hstring id);
         void _SaveWorkspaceViewState();
@@ -389,12 +391,14 @@ namespace winrt::TerminalApp::implementation
         void _WorkspaceDocumentSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
         void _WorkspaceDocumentTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& args);
         void _WorkspaceContentSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
+        void _ResizeWorkspaceFilesColumn();
         void _WorkspaceFilesDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
         void _WorkspaceDocumentDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
         void _WorkspaceDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
         void _WorkspaceDividerPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _WorkspaceDividerPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         winrt::TerminalApp::ColorPickupFlyout _tabColorPicker{ nullptr };
+        safe_void_coroutine _ShowTabColorPicker(winrt::TerminalApp::Tab tab);
 
         Microsoft::Terminal::Settings::Model::CascadiaSettings _settings{ nullptr };
 

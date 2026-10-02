@@ -814,9 +814,10 @@ namespace winrt::TerminalApp::implementation
     // - Typically will be called after we have sent a request for the color picker
     // Arguments:
     // - colorPicker: The color picker that we should attach to ourselves
+    // - target: The visible tab or workspace navigation row to anchor it to
     // Return Value:
     // - <none>
-    void Tab::AttachColorPicker(TerminalApp::ColorPickupFlyout& colorPicker)
+    void Tab::AttachColorPicker(TerminalApp::ColorPickupFlyout& colorPicker, const FrameworkElement& target)
     {
         ASSERT_UI_THREAD();
 
@@ -848,7 +849,81 @@ namespace winrt::TerminalApp::implementation
             }
         });
 
-        _tabColorPickup.ShowAt(TabViewItem());
+        _tabColorPickup.ShowAt(target);
+    }
+
+    void Tab::SetNavigationRow(const Controls::Grid& row)
+    {
+        ASSERT_UI_THREAD();
+
+        _navigationRow = winrt::make_weak(row);
+        _UpdateNavigationRowColor();
+    }
+
+    void Tab::SetNavigationRowSelected(bool selected)
+    {
+        ASSERT_UI_THREAD();
+
+        if (_navigationRowSelected != selected)
+        {
+            _navigationRowSelected = selected;
+            _UpdateNavigationRowColor();
+        }
+    }
+
+    void Tab::_UpdateNavigationRowColor()
+    {
+        if (const auto row = _navigationRow.get())
+        {
+            const auto applyForeground = [&](const Media::Brush& brush) {
+                const auto apply = [&](const Controls::Control& control) {
+                    if (brush)
+                    {
+                        control.Foreground(brush);
+                    }
+                    else
+                    {
+                        control.ClearValue(Controls::Control::ForegroundProperty());
+                    }
+                };
+                apply(_headerControl);
+                for (const auto& child : row.Children())
+                {
+                    if (const auto control = child.try_as<Controls::Control>())
+                    {
+                        apply(control);
+                    }
+                }
+            };
+            const auto themes = TabViewItem().Resources().ThemeDictionaries();
+            const auto lightKey = box_value(L"Light");
+            const auto backgroundKey = box_value(L"TabViewItemHeaderBackgroundSelected");
+            const auto foregroundKey = box_value(_navigationRowSelected ? L"TabViewItemHeaderForegroundSelected" : L"TabViewItemHeaderForeground");
+            row.Resources().ThemeDictionaries().Clear();
+            if (themes.HasKey(lightKey))
+            {
+                const auto colors = themes.Lookup(lightKey).as<ResourceDictionary>();
+                if (colors.HasKey(backgroundKey) && colors.HasKey(foregroundKey))
+                {
+                    for (const auto& [key, value] : themes)
+                    {
+                        // Each resource dictionary has a single parent. Share
+                        // its brushes through a separately owned dictionary.
+                        ResourceDictionary rowColors{};
+                        for (const auto& [colorKey, colorValue] : value.as<ResourceDictionary>())
+                        {
+                            rowColors.Insert(colorKey, colorValue);
+                        }
+                        row.Resources().ThemeDictionaries().Insert(key, rowColors);
+                    }
+                    row.Background(_navigationRowSelected ? colors.Lookup(backgroundKey).as<Media::Brush>() : TabViewItem().Background());
+                    applyForeground(colors.Lookup(foregroundKey).as<Media::Brush>());
+                    return;
+                }
+            }
+            row.Background(Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
+            applyForeground(nullptr);
+        }
     }
 
     // Method Description:
@@ -2605,6 +2680,7 @@ namespace winrt::TerminalApp::implementation
             VisualStateManager::GoToState(item, L"Selected", true);
             VisualStateManager::GoToState(item, L"Normal", true);
         }
+        _UpdateNavigationRowColor();
     }
 
     TabCloseButtonVisibility Tab::CloseButtonVisibility()

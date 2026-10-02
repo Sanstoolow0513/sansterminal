@@ -2450,9 +2450,10 @@ namespace winrt::TerminalApp::implementation
 
         layout.LaunchMode({ mode });
 
-        // Only save the content size because the tab size will be added on load.
-        const auto contentWidth = static_cast<float>(_tabContent.ActualWidth());
-        const auto contentHeight = static_cast<float>(_tabContent.ActualHeight());
+        // Save the whole workspace surface, including navigation, explorer and
+        // documents. The tab row's height will be added on load.
+        const auto contentWidth = static_cast<float>(SideTabLayout().ActualWidth());
+        const auto contentHeight = static_cast<float>(SideTabLayout().ActualHeight());
         const winrt::Windows::Foundation::Size windowSize{ contentWidth, contentHeight };
 
         layout.InitialSize(windowSize);
@@ -4727,7 +4728,7 @@ namespace winrt::TerminalApp::implementation
         }
         else
         {
-            _tabView.SelectedItem(_settingsTab.TabViewItem());
+            FocusTab(_settingsTab);
         }
     }
 
@@ -5833,19 +5834,31 @@ namespace winrt::TerminalApp::implementation
             items.Clear();
             for (const auto& workspace : _workspaces)
             {
-                MenuFlyoutItem item{};
+                MenuFlyoutSubItem item{};
                 item.Text(workspace.displayName);
                 item.Tag(box_value(workspace.id));
                 if (workspace.id == _activeWorkspaceId)
                 {
                     item.Icon(SymbolIcon{ Symbol::Accept });
                 }
-                item.Click([weakThis = get_weak(), id = workspace.id](auto&&, auto&&) {
+                MenuFlyoutItem activate{};
+                activate.Text(RS_(L"ActivateWorkspaceButton"));
+                activate.Click([weakThis = get_weak(), id = workspace.id](auto&&, auto&&) {
                     if (const auto page = weakThis.get())
                     {
                         page->_SwitchWorkspace(id, false);
                     }
                 });
+                item.Items().Append(activate);
+                MenuFlyoutItem close{};
+                close.Text(RS_(L"CloseWorkspaceButton"));
+                close.Click([weakThis = get_weak(), id = workspace.id](auto&&, auto&&) -> safe_void_coroutine {
+                    if (const auto page = weakThis.get())
+                    {
+                        co_await page->_CloseWorkspace(id);
+                    }
+                });
+                item.Items().Append(close);
                 items.Append(item);
             }
             row->WorkspaceSwitcher().Visibility(_workspaces.empty() ? Visibility::Collapsed : Visibility::Visible);
@@ -5987,6 +6000,7 @@ namespace winrt::TerminalApp::implementation
                     Grid::SetColumn(close, 2);
                     row.Children().Append(close);
                     node.Content(row);
+                    _GetTabImpl(tab)->SetNavigationRow(row);
                     _workspaceNavigationEntries.push_back({ tab, node });
                     entry = std::prev(_workspaceNavigationEntries.end());
                 }
@@ -6031,11 +6045,41 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    void TerminalPage::_WorkspaceNavigationRowLoaded(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        const auto host = sender.as<ContentControl>();
+        if (const auto node = host.DataContext().try_as<MUX::Controls::TreeViewNode>())
+        {
+            const auto content = node.Content().as<FrameworkElement>();
+            // WinUI can retain a recycled container while realizing its
+            // replacement. A live row must have only one visual parent.
+            for (auto parent = VisualTreeHelper::GetParent(content); parent; parent = VisualTreeHelper::GetParent(parent))
+            {
+                if (const auto previous = parent.try_as<ContentControl>(); previous && previous.Content() == content)
+                {
+                    previous.Content(nullptr);
+                    break;
+                }
+            }
+            host.Content(content);
+        }
+    }
+
+    void TerminalPage::_WorkspaceNavigationRowUnloaded(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        sender.as<ContentControl>().Content(nullptr);
+    }
+
     void TerminalPage::_SyncWorkspaceNavigationSelection()
     {
         if (_tabPosition != TabPosition::Left)
         {
             return;
+        }
+        const auto focusedTab = _GetFocusedTab();
+        for (const auto& entry : _workspaceNavigationEntries)
+        {
+            _GetTabImpl(entry.tab)->SetNavigationRowSelected(entry.tab == focusedTab && _IsTabInActiveWorkspace(entry.tab));
         }
         if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
         {
@@ -6248,6 +6292,7 @@ namespace winrt::TerminalApp::implementation
         {
             _UpdateWorkspaceFilesUI();
         }
+        _ResizeWorkspaceFilesColumn();
 
         if (createTabIfEmpty && isNew)
         {
@@ -6478,7 +6523,7 @@ namespace winrt::TerminalApp::implementation
         _workspaceFileEntries.clear();
         WorkspaceFilesPanel().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
         WorkspaceFilesDivider().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
-        WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(hasFolder ? workspace->explorerWidth : 0.0, GridUnitType::Pixel));
+        _ResizeWorkspaceFilesColumn();
         if (hasFolder)
         {
             if (workspace->fileRoot)
@@ -7179,15 +7224,33 @@ namespace winrt::TerminalApp::implementation
         _UpdateWorkspaceDocumentLayout();
     }
 
+    void TerminalPage::_ResizeWorkspaceFilesColumn()
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+        {
+            // The sidebar's requested pixel width may have changed in this
+            // layout pass, before ActualWidth has caught up.
+            if (const auto width = SideTabLayout().ActualWidth(); width > 0)
+            {
+                const auto availableWidth = std::max(0.0, width - SideTabColumn().Width().Value);
+                const auto minimumWidth = std::min(160.0, availableWidth * 0.4);
+                const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
+                workspace->explorerWidth = std::clamp(workspace->explorerWidth, minimumWidth, maximumWidth);
+            }
+            WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(workspace->explorerWidth, GridUnitType::Pixel));
+        }
+        else
+        {
+            WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+        }
+    }
+
     void TerminalPage::_WorkspaceFilesDividerDragDelta(const IInspectable&, const WUX::Controls::Primitives::DragDeltaEventArgs& args)
     {
         if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
         {
-            const auto availableWidth = SideTabLayout().ActualWidth() - SideTabColumn().ActualWidth();
-            const auto minimumWidth = std::min(160.0, availableWidth * 0.4);
-            const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
-            workspace->explorerWidth = std::clamp(workspace->explorerWidth + args.HorizontalChange(), minimumWidth, maximumWidth);
-            WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(workspace->explorerWidth, GridUnitType::Pixel));
+            workspace->explorerWidth += args.HorizontalChange();
+            _ResizeWorkspaceFilesColumn();
         }
     }
 
@@ -7253,6 +7316,7 @@ namespace winrt::TerminalApp::implementation
             icon.Glyph(show ? L"\xE89F" : L"\xE8A0");
         }
         WorkspaceHub().Margin(ThicknessHelper::FromLengths(show ? _sideTabWidth : 0, 0, 0, 0));
+        _ResizeWorkspaceFilesColumn();
     }
 
     void TerminalPage::_ResizeSideTabColumn(double requestedWidth)
@@ -7268,6 +7332,7 @@ namespace winrt::TerminalApp::implementation
         _sideTabWidth = std::clamp(requestedWidth, minimumWidth, maximumWidth);
         SideTabColumn().Width(GridLengthHelper::FromValueAndType(_sideTabWidth, GridUnitType::Pixel));
         WorkspaceHub().Margin(ThicknessHelper::FromLengths(_sideTabWidth, 0, 0, 0));
+        _ResizeWorkspaceFilesColumn();
     }
 
     void TerminalPage::_SideTabLayoutSizeChanged(const IInspectable& /*sender*/, const WUX::SizeChangedEventArgs& /*e*/)
@@ -7276,6 +7341,7 @@ namespace winrt::TerminalApp::implementation
         {
             _ResizeSideTabColumn(_sideTabWidth);
         }
+        _ResizeWorkspaceFilesColumn();
     }
 
     void TerminalPage::_SideTabDockClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*args*/)

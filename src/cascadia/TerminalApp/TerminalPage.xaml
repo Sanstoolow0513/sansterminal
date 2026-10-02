@@ -74,7 +74,8 @@
                         <mux:TreeView.ItemTemplate>
                             <DataTemplate>
                                 <ContentControl HorizontalContentAlignment="Stretch"
-                                                Content="{Binding Content}" />
+                                                Loaded="_WorkspaceNavigationRowLoaded"
+                                                Unloaded="_WorkspaceNavigationRowUnloaded" />
                             </DataTemplate>
                         </mux:TreeView.ItemTemplate>
                     </mux:TreeView>
