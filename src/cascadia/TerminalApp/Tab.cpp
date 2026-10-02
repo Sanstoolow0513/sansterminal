@@ -852,12 +852,38 @@ namespace winrt::TerminalApp::implementation
         _tabColorPickup.ShowAt(target);
     }
 
-    void Tab::SetNavigationRow(const Controls::Grid& row)
+    void Tab::SetNavigationRow(const Controls::Grid& row, const Controls::Button& closeButton)
     {
         ASSERT_UI_THREAD();
 
         _navigationRow = winrt::make_weak(row);
+        _navigationCloseButton = winrt::make_weak(closeButton);
+        row.PointerEntered({ get_weak(), &Tab::_NavigationRowPointerEntered });
+        row.PointerExited({ get_weak(), &Tab::_NavigationRowPointerExited });
+        _UpdateNavigationCloseButton();
         _UpdateNavigationRowColor();
+    }
+
+    void Tab::_NavigationRowPointerEntered(const IInspectable&, const Input::PointerRoutedEventArgs&)
+    {
+        _navigationRowHovered = true;
+        _UpdateNavigationCloseButton();
+    }
+
+    void Tab::_NavigationRowPointerExited(const IInspectable&, const Input::PointerRoutedEventArgs&)
+    {
+        _navigationRowHovered = false;
+        _UpdateNavigationCloseButton();
+    }
+
+    void Tab::_UpdateNavigationCloseButton()
+    {
+        if (const auto button = _navigationCloseButton.get())
+        {
+            const bool visible = TabViewItem().IsClosable() &&
+                                 (_closeButtonVisibility != TabCloseButtonVisibility::Hover || _navigationRowHovered);
+            button.Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
+        }
     }
 
     void Tab::SetNavigationRowSelected(bool selected)
@@ -2734,6 +2760,7 @@ namespace winrt::TerminalApp::implementation
             }
         }
         TabViewItem().IsClosable(isClosable);
+        _UpdateNavigationCloseButton();
     }
 
     bool Tab::_focused() const noexcept

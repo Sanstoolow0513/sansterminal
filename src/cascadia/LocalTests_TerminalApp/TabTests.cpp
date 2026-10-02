@@ -124,6 +124,12 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceSurfaceDimensions);
         TEST_METHOD(WorkspaceTabSwitcherModes);
         TEST_METHOD(WorkspaceSidebarTabColors);
+        TEST_METHOD(WorkspaceResizeCallbacks);
+        TEST_METHOD(WorkspaceLayoutTabOrder);
+        TEST_METHOD(WorkspaceCloseSelectedMruTab);
+        TEST_METHOD(WorkspaceCompactViewRestoration);
+        TEST_METHOD(WorkspacePreviewThemeChanges);
+        TEST_METHOD(WorkspaceNavigationCloseButtonHover);
 
         TEST_METHOD(CreateTerminalPage);
 
@@ -1131,6 +1137,309 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Black(), title.Foreground().as<Media::SolidColorBrush>().Color());
             VERIFY_IS_TRUE(page->_FindWorkspace(page->_activeWorkspaceId)->navigationNode.IsExpanded());
             page->_tabColorPicker.Hide();
+        });
+    }
+
+    void TabTests::WorkspaceResizeCallbacks()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            const auto workspaceA = page->_activeWorkspaceId;
+            const auto control = page->_GetActiveControl();
+            // The page only forwards the size arguments. Exercise callback
+            // routing without depending on the control's private args factory.
+            const winrt::Microsoft::Terminal::Control::WindowSizeChangedEventArgs args{ nullptr };
+            uint32_t resizeRequests = 0;
+            const auto token = page->WindowSizeChanged([&](auto&&, auto&&) { ++resizeRequests; });
+            const auto revoke = wil::scope_exit([&]() noexcept { page->WindowSizeChanged(token); });
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(1u, resizeRequests);
+            page->SetFullscreen(true);
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(1u, resizeRequests);
+            page->SetFullscreen(false);
+
+            page->_SwitchWorkspace(L"resize-empty-B", false);
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_IS_NULL(page->_GetFocusedTabImpl());
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(1u, resizeRequests);
+
+            page->_SwitchWorkspace(workspaceA, false);
+            page->_WindowSizeChanged(Grid{}, args);
+            VERIFY_ARE_EQUAL(1u, resizeRequests);
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(2u, resizeRequests);
+
+            // A queued callback from a removed tab must not resize the sole
+            // remaining tab's window, even though it now has a focused tab.
+            const auto originalTab = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            const auto remainingControl = page->_GetActiveControl();
+            originalTab.Close();
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            page->_WindowSizeChanged(control, args);
+            VERIFY_ARE_EQUAL(2u, resizeRequests);
+            page->_WindowSizeChanged(remainingControl, args);
+            VERIFY_ARE_EQUAL(3u, resizeRequests);
+        });
+    }
+
+    void TabTests::WorkspaceLayoutTabOrder()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+            TEST_METHOD_PROPERTY(L"Data:markers", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        bool markers;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"markers", markers));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        const wil::unique_handle completed{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        VERIFY_IS_NOT_NULL(completed.get());
+        winrt::event_token completionToken{};
+        winrt::hstring workspaceA;
+        TestOnUIThread([&]() {
+            page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterLastTab);
+            workspaceA = page->_activeWorkspaceId;
+            page->_SwitchWorkspace(L"layout-order-B", false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            page->_SwitchWorkspace(workspaceA, false);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 2 }));
+            page->_SelectTab(1);
+            const auto layout = page->GetWindowLayout();
+            VERIFY_IS_NOT_NULL(layout);
+            auto actions = wil::to_vector(layout.TabLayout());
+            if (!markers)
+            {
+                std::erase_if(actions, [](const auto& action) { return action.Action() == ShortcutAction::OpenWorkspace; });
+            }
+            const std::vector<winrt::TerminalApp::Tab> tabs{ page->_tabs.begin(), page->_tabs.end() };
+            for (const auto& tab : tabs)
+            {
+                tab.Close();
+            }
+            page->_SwitchWorkspace(workspaceA, false);
+            page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterCurrentTab);
+            completionToken = page->_actionDispatch->SwitchToTab([event = completed.get()](auto&&, auto&&) { SetEvent(event); });
+            page->ProcessStartupActions(std::move(actions), {}, {}, !markers);
+        });
+        const auto revoke = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() { page->_actionDispatch->SwitchToTab(completionToken); });
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(completed.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(3u, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(L"Profile 0", page->_tabs.GetAt(0).Title());
+            VERIFY_ARE_EQUAL(L"Profile 1", page->_tabs.GetAt(1).Title());
+            VERIFY_ARE_EQUAL(L"Profile 2", page->_tabs.GetAt(2).Title());
+            VERIFY_ARE_EQUAL(1u, page->_GetFocusedTabIndex().value());
+            VERIFY_ARE_EQUAL(markers ? winrt::hstring{ L"layout-order-B" } : workspaceA, page->_activeWorkspaceId);
+
+            // Replaying a layout must not change the insertion policy for the
+            // user's next interactive new-tab command.
+            page->_SelectTab(0);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 3 }));
+            VERIFY_ARE_EQUAL(L"Profile 3", page->_tabs.GetAt(1).Title());
+            VERIFY_ARE_EQUAL(L"Profile 1", page->_tabs.GetAt(2).Title());
+        });
+    }
+
+    void TabTests::WorkspaceCloseSelectedMruTab()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            page->_settings.WindowSettings(L"").NewTabPosition(NewTabPosition::AfterLastTab);
+            const auto workspace = page->_activeWorkspaceId;
+            const auto first = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            const auto adjacent = page->_GetFocusedTab();
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 2 }));
+            const auto selected = page->_GetFocusedTab();
+            page->FocusTab(first);
+            page->FocusTab(selected);
+            page->_SwitchWorkspace(L"close-mru-background");
+            const auto background = page->_GetFocusedTab();
+            page->_SwitchWorkspace(workspace, false);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == selected);
+            selected.Close();
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == first);
+            VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(0) == first.Content());
+            VERIFY_ARE_EQUAL(workspace, page->_activeWorkspaceId);
+            adjacent.Close();
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == first);
+            first.Close();
+            VERIFY_IS_NULL(page->_GetFocusedTab());
+            VERIFY_ARE_EQUAL(0u, page->_tabContent.Children().Size());
+            VERIFY_ARE_EQUAL(1u, page->_tabs.Size());
+            VERIFY_IS_TRUE(page->_tabs.GetAt(0) == background);
+        });
+    }
+
+    void TabTests::WorkspaceCompactViewRestoration()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".txt");
+            const auto cleanup = wil::scope_exit([&]() noexcept {
+                std::error_code error;
+                std::filesystem::remove(file, error);
+            });
+            std::ofstream{ file } << "compact document preview";
+            const auto workspaceA = page->_activeWorkspaceId;
+            const auto terminal = page->_GetFocusedTab();
+            page->WorkspaceContentArea().Width(480);
+            page->UpdateLayout();
+            page->_OpenWorkspaceDocument(file, true);
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            page->_SwitchWorkspace(L"compact-restoration-B", false);
+            page->_SwitchWorkspace(workspaceA, false);
+            VERIFY_IS_FALSE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            VERIFY_IS_TRUE(page->_GetFocusedTab() == terminal);
+
+            // Activating the already-selected terminal is still an explicit
+            // request to show it in compact mode, in either tab-strip layout.
+            page->FocusTab(terminal);
+            VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            page->_SwitchWorkspace(L"compact-restoration-B", false);
+            page->_SwitchWorkspace(workspaceA, false);
+            VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+        });
+    }
+
+    void TabTests::WorkspacePreviewThemeChanges()
+    {
+        const auto page = _commonSetup();
+        std::filesystem::path file;
+        winrt::hstring workspaceA;
+        const auto cleanup = wil::scope_exit([&]() noexcept {
+            std::error_code error;
+            std::filesystem::remove(file, error);
+        });
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".cpp");
+            std::ofstream{ file } << "int value = 42; // preview\n";
+            workspaceA = page->_activeWorkspaceId;
+            page->RequestedTheme(ElementTheme::Dark);
+            page->UpdateLayout();
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+            // Change theme while the first palette's asynchronous batches may
+            // still be pending. Those batches must not overwrite the new one.
+            page->RequestedTheme(ElementTheme::Light);
+            page->UpdateLayout();
+        });
+        const auto verifyPalette = [&](bool dark, bool verifySelection) {
+            const auto bodyColor = dark ? winrt::Windows::UI::Color{ 255, 212, 212, 212 } : winrt::Windows::UI::Color{ 255, 32, 32, 32 };
+            const auto keywordColor = dark ? winrt::Windows::UI::Color{ 255, 86, 156, 214 } : winrt::Windows::UI::Color{ 255, 0, 0, 180 };
+            auto applied = false;
+            for (auto attempt = 0; attempt < 200 && !applied; ++attempt)
+            {
+                TestOnUIThread([&]() {
+                    const auto document = page->WorkspaceDocumentEditor().Document();
+                    applied = document.GetRange(4, 5).CharacterFormat().ForegroundColor() == bodyColor &&
+                              document.GetRange(0, 1).CharacterFormat().ForegroundColor() == keywordColor;
+                });
+                if (!applied)
+                {
+                    Sleep(10);
+                }
+            }
+            VERIFY_IS_TRUE(applied);
+            TestOnUIThread([&]() {
+                const auto document = page->WorkspaceDocumentEditor().Document();
+                if (verifySelection)
+                {
+                    VERIFY_ARE_EQUAL(4, document.Selection().StartPosition());
+                    VERIFY_ARE_EQUAL(9, document.Selection().EndPosition());
+                }
+                VERIFY_IS_TRUE(page->WorkspaceDocumentEditor().IsReadOnly());
+                winrt::hstring text;
+                document.GetText(TextGetOptions::None, text);
+                VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"int value = 42; // preview"));
+            });
+        };
+        verifyPalette(false, false);
+        TestOnUIThread([&]() {
+            page->WorkspaceDocumentEditor().Document().Selection().SetRange(4, 9);
+            VERIFY_ARE_EQUAL(4, page->WorkspaceDocumentEditor().Document().Selection().StartPosition());
+            page->RequestedTheme(ElementTheme::Dark);
+            page->UpdateLayout();
+        });
+        verifyPalette(true, true);
+        TestOnUIThread([&]() {
+            page->_SwitchWorkspace(L"preview-theme-B", false);
+            std::ofstream{ file } << "externally changed";
+            page->RequestedTheme(ElementTheme::Light);
+            page->UpdateLayout();
+            page->_SwitchWorkspace(workspaceA, false);
+        });
+        verifyPalette(false, true);
+    }
+
+    void TabTests::WorkspaceNavigationCloseButtonHover()
+    {
+        CascadiaSettings settings{ LR"({
+            "tabPosition": "left", "showTabsInTitlebar": false,
+            "theme": "hover-test",
+            "themes": [{ "name": "hover-test", "tab": { "showCloseButton": "hover" } }],
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "profiles": [{ "name": "Hover test", "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}", "closeOnExit": "never" }]
+        })",
+                                   {} };
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
+        TestOnUIThread([&]() {
+            const auto tab = page->_GetFocusedTabImpl();
+            const auto row = page->_workspaceNavigationEntries.front().node.Content().as<Grid>();
+            const auto close = row.Children().GetAt(2).as<Button>();
+            VERIFY_IS_TRUE(tab->TabViewItem().IsClosable());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, close.Visibility());
+            tab->_NavigationRowPointerEntered(row, nullptr);
+            VERIFY_ARE_EQUAL(Visibility::Visible, close.Visibility());
+            tab->_NavigationRowPointerExited(row, nullptr);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, close.Visibility());
+
+            tab->CloseButtonVisibility(TabCloseButtonVisibility::Always);
+            VERIFY_ARE_EQUAL(Visibility::Visible, close.Visibility());
+            tab->CloseButtonVisibility(TabCloseButtonVisibility::Hover);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, close.Visibility());
+            tab->_NavigationRowPointerEntered(row, nullptr);
+            tab->ReadOnly(true);
+            page->_updateAllTabCloseButtons();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, close.Visibility());
+            tab->ReadOnly(false);
+            page->_updateAllTabCloseButtons();
+            VERIFY_ARE_EQUAL(Visibility::Visible, close.Visibility());
+            tab->CloseButtonVisibility(TabCloseButtonVisibility::Never);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, close.Visibility());
+            tab->CloseButtonVisibility(TabCloseButtonVisibility::ActiveOnly);
+            VERIFY_ARE_EQUAL(Visibility::Visible, close.Visibility());
+            tab->Focus(FocusState::Unfocused);
+            tab->CloseButtonVisibility(TabCloseButtonVisibility::ActiveOnly);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, close.Visibility());
+            tab->Focus(FocusState::Programmatic);
+            tab->CloseButtonVisibility(TabCloseButtonVisibility::ActiveOnly);
+            VERIFY_ARE_EQUAL(Visibility::Visible, close.Visibility());
         });
     }
 

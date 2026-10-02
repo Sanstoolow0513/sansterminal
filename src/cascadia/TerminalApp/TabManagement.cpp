@@ -124,7 +124,7 @@ namespace winrt::TerminalApp::implementation
         if (insertPosition == -1)
         {
             insertPosition = _tabs.Size();
-            if (_currentWindowSettings().NewTabPosition() == NewTabPosition::AfterCurrentTab)
+            if (!_restoringLayout && _currentWindowSettings().NewTabPosition() == NewTabPosition::AfterCurrentTab)
             {
                 auto currentTabIndex = _GetFocusedTabIndex();
                 if (currentTabIndex.has_value())
@@ -566,6 +566,7 @@ namespace winrt::TerminalApp::implementation
         auto unsetRemoving = wil::scope_exit([&]() noexcept { _removing = false; });
 
         const auto removedFromActiveWorkspace = _IsTabInActiveWorkspace(tab);
+        const auto removedSelectedTab = _GetFocusedTab() == tab;
 
         // NOTE: Workspace persistence for named windows used to live here,
         // but by the time _RemoveTab runs the pane content may already be
@@ -623,7 +624,7 @@ namespace winrt::TerminalApp::implementation
             // 3. When rearranging tabs (GH#7916) _OnTabItemsChanged is suppressed
 
             auto newSelectedTab = _GetFocusedTab();
-            if (!newSelectedTab || !_IsTabInActiveWorkspace(newSelectedTab))
+            if (removedSelectedTab || !newSelectedTab || !_IsTabInActiveWorkspace(newSelectedTab))
             {
                 newSelectedTab = nullptr;
                 for (const auto& candidate : _mruTabs)
@@ -637,7 +638,7 @@ namespace winrt::TerminalApp::implementation
             }
             if (newSelectedTab)
             {
-                _UpdatedSelectedTab(newSelectedTab);
+                _UpdatedSelectedTab(newSelectedTab, false);
                 _tabView.SelectedItem(newSelectedTab.TabViewItem());
             }
             else
@@ -745,9 +746,10 @@ namespace winrt::TerminalApp::implementation
         // GH#11107 - Always just set the item directly first so that if
         // tab movement is done as part of multiple actions following calls
         // to _GetFocusedTab will return the correct tab.
+        const auto alreadySelected = _tabView.SelectedItem() == tab.TabViewItem();
         _tabView.SelectedItem(tab.TabViewItem());
 
-        if (_startupState == StartupState::InStartup || _tabPosition == TabPosition::Left)
+        if (_startupState == StartupState::InStartup || _tabPosition == TabPosition::Left || alreadySelected)
         {
             _UpdatedSelectedTab(tab);
         }
@@ -880,8 +882,9 @@ namespace winrt::TerminalApp::implementation
                 {
                     _SwitchWorkspace(_WorkspaceForTab(tab), false);
                 }
+                const auto alreadySelected = _tabView.SelectedItem() == tab.TabViewItem();
                 _tabView.SelectedItem(tab.TabViewItem());
-                if (_tabPosition == TabPosition::Left)
+                if (_tabPosition == TabPosition::Left || alreadySelected)
                 {
                     _UpdatedSelectedTab(tab);
                 }
@@ -1228,7 +1231,7 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    void TerminalPage::_UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab)
+    void TerminalPage::_UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab, const bool activateTerminal)
     {
         if (WorkspaceHub().Visibility() == Visibility::Visible)
         {
@@ -1237,7 +1240,10 @@ namespace winrt::TerminalApp::implementation
         if (auto workspace = _FindWorkspace(_WorkspaceForTab(tab)))
         {
             workspace->lastFocused = tab;
-            workspace->preferTerminalInCompactView = true;
+            if (activateTerminal)
+            {
+                workspace->preferTerminalInCompactView = true;
+            }
         }
         _UpdateWorkspaceDocumentLayout();
         _SyncWorkspaceNavigationSelection();

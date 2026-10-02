@@ -192,7 +192,7 @@ namespace winrt::TerminalApp::implementation
         void Maximized(bool newMaximized);
         void RequestSetMaximized(bool newMaximized);
 
-        void SetStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions);
+        void SetStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions, bool restoreLayout = false);
         void SetStartupConnection(winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection connection);
 
         static std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> ConvertExecuteCommandlineToActions(const Microsoft::Terminal::Settings::Model::ExecuteCommandlineArgs& args);
@@ -209,7 +209,8 @@ namespace winrt::TerminalApp::implementation
 
         safe_void_coroutine ProcessStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions,
                                                   const winrt::hstring cwd = winrt::hstring{},
-                                                  const winrt::hstring env = winrt::hstring{});
+                                                  const winrt::hstring env = winrt::hstring{},
+                                                  bool restoreLayout = false);
         safe_void_coroutine CreateTabFromConnection(winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection connection);
 
         TerminalApp::WindowProperties WindowProperties() const noexcept { return _WindowProperties; };
@@ -344,6 +345,8 @@ namespace winrt::TerminalApp::implementation
         uint64_t _workspaceDocumentVersion{ 0 };
         size_t _workspaceDocumentLineCount{ 0 };
         bool _hasStartupActions{ false };
+        bool _startupActionsRestoreLayout{ false };
+        bool _restoringLayout{ false };
         WorkspaceSession* _FindWorkspace(const winrt::hstring& id);
         winrt::hstring _WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const;
         bool _IsTabInActiveWorkspace(const winrt::TerminalApp::Tab& tab) const;
@@ -384,6 +387,8 @@ namespace winrt::TerminalApp::implementation
         void _OpenWorkspaceDocument(const std::filesystem::path& path, bool pin);
         void _RefreshWorkspaceDocumentTabs();
         void _LoadWorkspaceDocument(const std::filesystem::path& path);
+        void _ApplyWorkspaceDocumentTheme();
+        void _WorkspaceDocumentThemeChanged(const Windows::UI::Xaml::FrameworkElement& sender, const IInspectable& args);
         safe_void_coroutine _ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, bool dark, uint64_t version);
         void _UpdateWorkspaceDocumentCaretStatus();
         void _WorkspaceDocumentCaretChanged(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
@@ -640,7 +645,7 @@ namespace winrt::TerminalApp::implementation
         void _OnTabItemsChanged(const IInspectable& sender, const Windows::Foundation::Collections::IVectorChangedEventArgs& eventArgs);
         void _OnTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& eventArgs);
         void _OnFirstLayout(const IInspectable& sender, const IInspectable& eventArgs);
-        void _UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab);
+        void _UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab, bool activateTerminal = true);
         void _UpdateBackground(const winrt::Microsoft::Terminal::Settings::Model::Profile& profile);
 
         // Docked side tabs ("tabPosition": "left") have a user-resizable

@@ -167,6 +167,7 @@
                                  Margin="8,0,8,4"
                                  FontFamily="Cascadia Mono"
                                  IsReadOnly="True"
+                                 ActualThemeChanged="_WorkspaceDocumentThemeChanged"
                                  SelectionChanged="_WorkspaceDocumentCaretChanged"
                                  TextWrapping="NoWrap" />
                     <Grid Grid.Row="2"

@@ -36,7 +36,7 @@ namespace winrt::TerminalApp::implementation
         void AttachPane(std::shared_ptr<Pane> pane);
 
         void AttachColorPicker(winrt::TerminalApp::ColorPickupFlyout& colorPicker, const winrt::Windows::UI::Xaml::FrameworkElement& target);
-        void SetNavigationRow(const winrt::Windows::UI::Xaml::Controls::Grid& row);
+        void SetNavigationRow(const winrt::Windows::UI::Xaml::Controls::Grid& row, const winrt::Windows::UI::Xaml::Controls::Button& closeButton);
         void SetNavigationRowSelected(bool selected);
 
         std::pair<std::shared_ptr<Pane>, std::shared_ptr<Pane>> SplitPane(winrt::Microsoft::Terminal::Settings::Model::SplitDirection splitType,
@@ -174,6 +174,8 @@ namespace winrt::TerminalApp::implementation
         winrt::TerminalApp::TabHeaderControl _headerControl{};
         winrt::TerminalApp::TerminalTabStatus _tabStatus{};
         winrt::weak_ref<winrt::Windows::UI::Xaml::Controls::Grid> _navigationRow;
+        winrt::weak_ref<winrt::Windows::UI::Xaml::Controls::Button> _navigationCloseButton;
+        bool _navigationRowHovered{ false };
         bool _navigationRowSelected{ false };
 
         winrt::TerminalApp::ColorPickupFlyout _tabColorPickup{ nullptr };
@@ -255,6 +257,9 @@ namespace winrt::TerminalApp::implementation
         void _ClearTabBackgroundColor();
         void _RefreshVisualState();
         void _UpdateNavigationRowColor();
+        void _UpdateNavigationCloseButton();
+        void _NavigationRowPointerEntered(const IInspectable& sender, const winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _NavigationRowPointerExited(const IInspectable& sender, const winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
 
         bool _focused() const noexcept;
         void _updateIsClosable();
