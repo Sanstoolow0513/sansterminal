@@ -23,8 +23,11 @@
 #include "SnippetsPaneContent.h"
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
+#include "WorkspaceEditorBuffer.h"
 
 #include <fstream>
+#include <cmath>
+#include <winrt/Windows.Data.Json.h>
 
 #include "LaunchPositionRequest.g.cpp"
 #include "WindowListEntry.g.cpp"
@@ -2435,6 +2438,18 @@ namespace winrt::TerminalApp::implementation
     //   signal that we want to close everything.
     safe_void_coroutine TerminalPage::RequestQuit()
     {
+        // The validation editor keeps buffers in this window. A process-wide
+        // quit would skip the other windows' unsaved-document confirmations.
+        if (_workspaceEditorEnabled)
+        {
+            CloseWindow();
+            co_return;
+        }
+        const auto lifetime = get_strong();
+        if (!co_await _ConfirmWorkspaceEditorClose())
+        {
+            co_return;
+        }
         const auto setting = _settings.GlobalSettings().ConfirmOnClose();
         if (setting != ConfirmOnClose::Never && !_displayingCloseDialog)
         {
@@ -2647,6 +2662,11 @@ namespace winrt::TerminalApp::implementation
     //   warn for the current window state, show a warning dialog.
     safe_void_coroutine TerminalPage::CloseWindow()
     {
+        const auto lifetime = get_strong();
+        if (!co_await _ConfirmWorkspaceEditorClose())
+        {
+            co_return;
+        }
         if (_ShouldWarnOnClose() &&
             !_displayingCloseDialog)
         {
@@ -6209,6 +6229,11 @@ namespace winrt::TerminalApp::implementation
 
     Windows::Foundation::IAsyncAction TerminalPage::_CloseWorkspace(winrt::hstring id)
     {
+        const auto lifetime = get_strong();
+        if (!co_await _ConfirmWorkspaceEditorClose(id))
+        {
+            co_return;
+        }
         const auto workspace = _FindWorkspace(id);
         if (!workspace)
         {
@@ -6232,9 +6257,7 @@ namespace winrt::TerminalApp::implementation
         }
         if (const auto page = weakThis.get())
         {
-            // The modal confirmation covers all terminals, including read-only
-            // panes. Documents are currently read-only previews, with no edits
-            // to save. Re-query after awaiting: shells may have exited meanwhile.
+            // Re-query after awaiting: shells may have exited meanwhile.
             std::vector<winrt::TerminalApp::Tab> tabs;
             for (const auto& tab : page->_tabs)
             {
@@ -6254,6 +6277,13 @@ namespace winrt::TerminalApp::implementation
                 {
                     page->WorkspaceNavigation().SelectedNode(nullptr);
                     page->WorkspaceNavigation().RootNodes().RemoveAt(index);
+                }
+            }
+            for (const auto& document : page->_workspaceDocuments)
+            {
+                if (document.workspaceId == id)
+                {
+                    page->_SendWorkspaceEditorMessage(L"close", document.id);
                 }
             }
             std::erase_if(page->_workspaceDocuments, [&](const auto& document) { return document.workspaceId == id; });
@@ -6599,7 +6629,7 @@ namespace winrt::TerminalApp::implementation
                     workspace->searchScrollOffset = scroll.VerticalOffset();
                 }
             }
-            if (workspace->documentVisible && !workspace->selectedDocument.empty())
+            if (!_workspaceEditorEnabled && workspace->documentVisible && !workspace->selectedDocument.empty())
             {
                 const auto document = WorkspaceDocumentEditor().Document();
                 document.GetText(TextGetOptions::FormatRtf, workspace->previewRtf);
@@ -6966,6 +6996,405 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    void TerminalPage::SetWorkspaceEditorEnabled(const bool enabled)
+    {
+        if (!enabled && std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.dirty; }))
+        {
+            return;
+        }
+        _workspaceEditorEnabled = enabled;
+        _workspaceEditorReady = false;
+        ++_workspaceDocumentVersion;
+        WorkspaceDocumentEditor().Visibility(enabled ? Visibility::Collapsed : Visibility::Visible);
+        WorkspaceEditorSurface().Visibility(enabled && WorkspaceHub().Visibility() != Visibility::Visible ? Visibility::Visible : Visibility::Collapsed);
+        _workspacePreviewPath.clear();
+        _workspacePreviewWorkspaceId.clear();
+        _RefreshWorkspaceDocumentTabs();
+    }
+
+    UIElement TerminalPage::GetWorkspaceEditorSurface()
+    {
+        return WorkspaceEditorSurface();
+    }
+
+    TerminalPage::WorkspaceDocument* TerminalPage::_FindWorkspaceDocument(const winrt::hstring& id)
+    {
+        const auto found = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& document) { return document.id == id; });
+        return found == _workspaceDocuments.end() ? nullptr : &*found;
+    }
+
+    void TerminalPage::_SendWorkspaceEditorMessage(const winrt::hstring& type, const winrt::hstring& id)
+    {
+        if (!_workspaceEditorEnabled || !_workspaceEditorReady)
+        {
+            return;
+        }
+        using namespace Windows::Data::Json;
+        JsonObject message;
+        message.Insert(L"version", JsonValue::CreateNumberValue(1));
+        message.Insert(L"type", JsonValue::CreateStringValue(type));
+        if (!id.empty())
+        {
+            message.Insert(L"id", JsonValue::CreateStringValue(id));
+        }
+        WorkspaceEditorMessage.raise(*this, message.Stringify());
+    }
+
+    void TerminalPage::_SendWorkspaceEditorDocument(const WorkspaceDocument& document)
+    {
+        if (!_workspaceEditorEnabled || !_workspaceEditorReady)
+        {
+            return;
+        }
+        using namespace Windows::Data::Json;
+        JsonObject message;
+        message.Insert(L"version", JsonValue::CreateNumberValue(1));
+        message.Insert(L"type", JsonValue::CreateStringValue(L"open"));
+        message.Insert(L"id", JsonValue::CreateStringValue(document.id));
+        message.Insert(L"workspaceId", JsonValue::CreateStringValue(document.workspaceId));
+        message.Insert(L"path", JsonValue::CreateStringValue(winrt::hstring{ document.path.native() }));
+        message.Insert(L"text", JsonValue::CreateStringValue(document.text));
+        message.Insert(L"readOnly", JsonValue::CreateBooleanValue(document.readOnly));
+        message.Insert(L"dirty", JsonValue::CreateBooleanValue(document.dirty));
+        message.Insert(L"revision", JsonValue::CreateNumberValue(static_cast<double>(document.revision)));
+        message.Insert(L"eol", JsonValue::CreateStringValue(document.crlf ? L"crlf" : L"lf"));
+        if (!document.readOnlyReason.empty())
+        {
+            message.Insert(L"reason", JsonValue::CreateStringValue(document.readOnlyReason));
+        }
+        WorkspaceEditorMessage.raise(*this, message.Stringify());
+    }
+
+    void TerminalPage::_ReadWorkspaceEditorDocument(WorkspaceDocument& document)
+    {
+        if (document.loaded)
+        {
+            return;
+        }
+        document.loaded = true;
+        document.readOnly = true;
+        try
+        {
+            const auto bytes = WorkspaceEditor::Read(document.path);
+            const auto decoded = WorkspaceEditor::Decode(bytes);
+            document.originalBytes = bytes;
+            document.text = winrt::hstring{ decoded.text };
+            document.savedText = document.text;
+            document.utf16 = decoded.utf16;
+            document.bom = decoded.bom;
+            document.crlf = decoded.crlf;
+            const auto attributes = GetFileAttributesW(document.path.c_str());
+            document.readOnly = attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_READONLY) != 0;
+            if (document.readOnly)
+            {
+                document.readOnlyReason = L"The file is marked read-only.";
+            }
+        }
+        catch (const std::exception& error)
+        {
+            document.originalBytes.clear();
+            document.readOnlyReason = winrt::to_hstring(error.what());
+            document.text = document.readOnlyReason;
+            document.savedText = document.text;
+        }
+    }
+
+    bool TerminalPage::_SaveWorkspaceEditorDocument(WorkspaceDocument& document)
+    {
+        using namespace Windows::Data::Json;
+        JsonObject message;
+        message.Insert(L"version", JsonValue::CreateNumberValue(1));
+        message.Insert(L"id", JsonValue::CreateStringValue(document.id));
+        try
+        {
+            if (!document.loaded || document.readOnly)
+            {
+                throw std::runtime_error("This document is read-only.");
+            }
+            const auto bytes = WorkspaceEditor::Encode(std::wstring_view{ document.text }, document.utf16, document.bom, document.crlf);
+            WorkspaceEditor::AtomicSave(document.path, document.originalBytes, bytes);
+            document.originalBytes = bytes;
+            document.savedText = document.text;
+            document.dirty = false;
+            message.Insert(L"type", JsonValue::CreateStringValue(L"saved"));
+            message.Insert(L"revision", JsonValue::CreateNumberValue(static_cast<double>(document.revision)));
+            WorkspaceEditorMessage.raise(*this, message.Stringify());
+            _RefreshWorkspaceDocumentTabs();
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            const auto description = winrt::to_hstring(error.what());
+            message.Insert(L"type", JsonValue::CreateStringValue(L"error"));
+            message.Insert(L"message", JsonValue::CreateStringValue(description));
+            WorkspaceEditorMessage.raise(*this, message.Stringify());
+            WorkspaceDocumentStatus().Text(description);
+            return false;
+        }
+    }
+
+    void TerminalPage::HandleWorkspaceEditorMessage(const winrt::hstring& serialized)
+    try
+    {
+        if (!_workspaceEditorEnabled)
+        {
+            return;
+        }
+        if (serialized.size() > 16 * 1024 * 1024)
+        {
+            _workspaceEditorSynchronizationFailed = true;
+            return;
+        }
+        using namespace Windows::Data::Json;
+        JsonObject message;
+        if (!JsonObject::TryParse(serialized, message) || message.GetNamedNumber(L"version", 0) != 1)
+        {
+            return;
+        }
+        const auto type = message.GetNamedString(L"type", L"");
+        if (type == L"flushed")
+        {
+            if (message.GetNamedString(L"requestId", L"") == _workspaceEditorFlushId)
+            {
+                _workspaceEditorFlushId.clear();
+            }
+            return;
+        }
+        if (type == L"unavailable")
+        {
+            _workspaceEditorReady = false;
+            return;
+        }
+        if (type == L"sync-error")
+        {
+            if (const auto document = _FindWorkspaceDocument(message.GetNamedString(L"id", L"")))
+            {
+                document->synchronizationFailed = true;
+                document->pinned = true;
+                _RefreshWorkspaceDocumentTabs();
+                WorkspaceDocumentStatus().Text(L"编辑器内容未能完整同步。请缩减内容后重试。");
+            }
+            return;
+        }
+        if (type == L"ready")
+        {
+            _workspaceEditorReady = true;
+            for (auto& document : _workspaceDocuments)
+            {
+                _ReadWorkspaceEditorDocument(document);
+                _SendWorkspaceEditorDocument(document);
+            }
+            if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                for (const auto& document : _workspaceDocuments)
+                {
+                    if (document.workspaceId == _activeWorkspaceId && document.path == workspace->selectedDocument)
+                    {
+                        _SendWorkspaceEditorMessage(L"activate", document.id);
+                        break;
+                    }
+                }
+            }
+            _ApplyWorkspaceDocumentTheme();
+            return;
+        }
+        if (type != L"changed" && type != L"save")
+        {
+            return;
+        }
+        const auto document = _FindWorkspaceDocument(message.GetNamedString(L"id", L""));
+        if (!document || !document->loaded || document->readOnly)
+        {
+            return;
+        }
+        const auto revision = message.GetNamedNumber(L"revision", -1);
+        const auto text = message.GetNamedString(L"text");
+        if (!std::isfinite(revision) || revision <= 0 || revision > 9007199254740991.0 || std::floor(revision) != revision)
+        {
+            return;
+        }
+        if (text.size() > 3 * 1024 * 1024)
+        {
+            document->synchronizationFailed = true;
+            document->pinned = true;
+            _RefreshWorkspaceDocumentTabs();
+            JsonObject error;
+            error.Insert(L"version", JsonValue::CreateNumberValue(1));
+            error.Insert(L"type", JsonValue::CreateStringValue(L"error"));
+            error.Insert(L"id", JsonValue::CreateStringValue(document->id));
+            error.Insert(L"message", JsonValue::CreateStringValue(L"The editor buffer exceeds the 3 MiB text limit. Reduce its size before saving or closing."));
+            WorkspaceEditorMessage.raise(*this, error.Stringify());
+            return;
+        }
+        document->synchronizationFailed = false;
+        document->text = winrt::hstring{ WorkspaceEditor::NormalizeLineEndings(std::wstring_view{ text }) };
+        document->revision = static_cast<uint64_t>(revision);
+        document->dirty = document->text != document->savedText;
+        document->pinned = document->pinned || document->dirty;
+        if (type == L"save")
+        {
+            _SaveWorkspaceEditorDocument(*document);
+        }
+        else
+        {
+            _RefreshWorkspaceDocumentTabs();
+        }
+    }
+    CATCH_LOG()
+
+    void TerminalPage::WorkspaceEditorFocused()
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            workspace->preferTerminalInCompactView = false;
+            _UpdateWorkspaceDocumentLayout();
+        }
+    }
+
+    void TerminalPage::_FocusWorkspaceDocument()
+    {
+        if (_workspaceEditorEnabled)
+        {
+            _SendWorkspaceEditorMessage(L"focus");
+        }
+        else
+        {
+            WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+        }
+    }
+
+    Windows::Foundation::IAsyncOperation<bool> TerminalPage::_ConfirmWorkspaceEditorClose(winrt::hstring workspaceId, winrt::hstring documentId)
+    {
+        const auto lifetime = get_strong();
+        if (_displayingDocumentCloseDialog)
+        {
+            co_return false;
+        }
+        _displayingDocumentCloseDialog = true;
+        winrt::hstring requestId;
+        const auto reset = wil::scope_exit([&]() noexcept {
+            _displayingDocumentCloseDialog = false;
+            _workspaceEditorFlushId.clear();
+            if (_workspaceEditorEnabled && _workspaceEditorReady)
+            {
+                using namespace Windows::Data::Json;
+                JsonObject message;
+                message.Insert(L"version", JsonValue::CreateNumberValue(1));
+                message.Insert(L"type", JsonValue::CreateStringValue(L"resume"));
+                message.Insert(L"requestId", JsonValue::CreateStringValue(requestId));
+                WorkspaceEditorMessage.raise(*this, message.Stringify());
+            }
+        });
+        if (_workspaceEditorEnabled && _workspaceEditorReady && !_workspaceDocuments.empty())
+        {
+            using namespace Windows::Data::Json;
+            _workspaceEditorFlushId = winrt::hstring{ std::to_wstring(++_nextWorkspaceEditorFlushId) };
+            requestId = _workspaceEditorFlushId;
+            _workspaceEditorSynchronizationFailed = false;
+            JsonObject message;
+            message.Insert(L"version", JsonValue::CreateNumberValue(1));
+            message.Insert(L"type", JsonValue::CreateStringValue(L"flush"));
+            message.Insert(L"requestId", JsonValue::CreateStringValue(_workspaceEditorFlushId));
+            WorkspaceEditorMessage.raise(*this, message.Stringify());
+            const auto dispatcher = Dispatcher();
+            for (size_t attempt = 0; attempt < 100 && !_workspaceEditorFlushId.empty(); ++attempt)
+            {
+                co_await winrt::resume_after(20ms);
+                co_await wil::resume_foreground(dispatcher);
+            }
+            if (!_workspaceEditorFlushId.empty())
+            {
+                WorkspaceDocumentStatus().Text(L"等待编辑器同步超时，关闭已取消。");
+                co_return false;
+            }
+            if (_workspaceEditorSynchronizationFailed || std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.synchronizationFailed; }))
+            {
+                WorkspaceDocumentStatus().Text(L"编辑器内容未能完整同步，关闭已取消。请缩减内容后重试。");
+                co_return false;
+            }
+        }
+        if (std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.synchronizationFailed; }))
+        {
+            WorkspaceDocumentStatus().Text(L"编辑器内容未能完整同步，关闭已取消。请缩减内容后重试。");
+            co_return false;
+        }
+        const auto matches = [&](const auto& document) {
+            return document.dirty && (workspaceId.empty() || document.workspaceId == workspaceId) && (documentId.empty() || document.id == documentId);
+        };
+        if (!std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), matches))
+        {
+            co_return true;
+        }
+        std::wstring names;
+        for (const auto& document : _workspaceDocuments)
+        {
+            if (matches(document))
+            {
+                names += document.path.filename().native() + L"\n";
+            }
+        }
+        ContentDialog dialog;
+        Automation::AutomationProperties::SetAutomationId(dialog, L"WorkspaceEditorUnsavedDialog");
+        dialog.Title(box_value(L"保存未保存的文件？"));
+        dialog.Content(box_value(winrt::hstring{ names }));
+        dialog.PrimaryButtonText(L"保存");
+        dialog.SecondaryButtonText(L"放弃");
+        dialog.CloseButtonText(L"取消");
+        dialog.DefaultButton(ContentDialogButton::Close);
+        const auto presenter = _dialogPresenter.get();
+        if (!presenter)
+        {
+            co_return false;
+        }
+        const auto result = co_await presenter.ShowDialog(dialog);
+        if (result == ContentDialogResult::Secondary)
+        {
+            co_return true;
+        }
+        if (result != ContentDialogResult::Primary)
+        {
+            co_return false;
+        }
+        // Save each current native buffer. A conflict keeps the document open.
+        std::vector<winrt::hstring> ids;
+        for (const auto& document : _workspaceDocuments)
+        {
+            if (matches(document))
+            {
+                ids.push_back(document.id);
+            }
+        }
+        for (const auto& id : ids)
+        {
+            if (const auto document = _FindWorkspaceDocument(id); document && !_SaveWorkspaceEditorDocument(*document))
+            {
+                co_return false;
+            }
+        }
+        co_return true;
+    }
+
+    safe_void_coroutine TerminalPage::_CloseWorkspaceDocument(winrt::hstring id)
+    {
+        const auto lifetime = get_strong();
+        if (!co_await _ConfirmWorkspaceEditorClose({}, id))
+        {
+            co_return;
+        }
+        const auto document = _FindWorkspaceDocument(id);
+        if (!document)
+        {
+            co_return;
+        }
+        if (auto workspace = _FindWorkspace(document->workspaceId); workspace && workspace->selectedDocument == document->path)
+        {
+            workspace->selectedDocument.clear();
+        }
+        _SendWorkspaceEditorMessage(L"close", id);
+        std::erase_if(_workspaceDocuments, [&](const auto& value) { return value.id == id; });
+        _RefreshWorkspaceDocumentTabs();
+    }
+
     void TerminalPage::_OpenWorkspaceDocument(const std::filesystem::path& path, const bool pin)
     {
         const auto workspace = _FindWorkspace(_activeWorkspaceId);
@@ -6986,7 +7415,7 @@ namespace winrt::TerminalApp::implementation
                     found = it;
                     break;
                 }
-                if (!it->pinned)
+                if (!it->pinned && !it->dirty && !it->synchronizationFailed)
                 {
                     preview = it;
                 }
@@ -6997,20 +7426,34 @@ namespace winrt::TerminalApp::implementation
             if (preview != _workspaceDocuments.end())
             {
                 found = preview;
+                _SendWorkspaceEditorMessage(L"close", found->id);
+                const auto tab = found->tab;
+                *found = {};
+                found->workspaceId = _activeWorkspaceId;
                 found->path = normalizedPath;
+                found->tab = tab;
+                found->id = winrt::hstring{ std::to_wstring(++_nextWorkspaceDocumentId) };
             }
             else
             {
-                _workspaceDocuments.push_back({ _activeWorkspaceId, normalizedPath, MUX::Controls::TabViewItem{}, pin });
+                WorkspaceDocument document;
+                document.workspaceId = _activeWorkspaceId;
+                document.path = normalizedPath;
+                document.tab = MUX::Controls::TabViewItem{};
+                document.id = winrt::hstring{ std::to_wstring(++_nextWorkspaceDocumentId) };
+                _workspaceDocuments.push_back(std::move(document));
                 found = std::prev(_workspaceDocuments.end());
             }
         }
-        found->pinned = found->pinned || pin;
+        // The web editor reports edits across a process boundary. Keep every
+        // editor tab until explicitly closed so a fast file-tree click cannot
+        // replace a preview before its latest changed message reaches us.
+        found->pinned = found->pinned || pin || _workspaceEditorEnabled;
         workspace->selectedDocument = normalizedPath;
         workspace->documentVisible = true;
         workspace->preferTerminalInCompactView = false;
         _RefreshWorkspaceDocumentTabs();
-        WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+        _FocusWorkspaceDocument();
     }
 
     void TerminalPage::_RefreshWorkspaceDocumentTabs()
@@ -7026,9 +7469,10 @@ namespace winrt::TerminalApp::implementation
                 continue;
             }
             TextBlock title{};
-            title.Text(winrt::hstring{ document.path.filename().native() });
+            title.Text(winrt::hstring{ document.path.filename().native() } + (document.dirty ? L" *" : L""));
             title.FontStyle(document.pinned ? FontStyle::Normal : FontStyle::Italic);
             document.tab.Header(title);
+            Automation::AutomationProperties::SetName(document.tab, winrt::hstring{ document.path.filename().native() });
             document.tab.IsClosable(true);
             WorkspaceDocumentTabs().TabItems().Append(document.tab);
             if (workspace && document.path == workspace->selectedDocument)
@@ -7060,7 +7504,7 @@ namespace winrt::TerminalApp::implementation
         else if (_restoringWorkspaceView || _workspacePreviewWorkspaceId != _activeWorkspaceId ||
                  _workspacePreviewPath != workspace->selectedDocument)
         {
-            if (_restoringWorkspaceView && workspace->previewPath == workspace->selectedDocument && !workspace->previewRtf.empty())
+            if (!_workspaceEditorEnabled && _restoringWorkspaceView && workspace->previewPath == workspace->selectedDocument && !workspace->previewRtf.empty())
             {
                 ++_workspaceDocumentVersion;
                 _workspacePreviewWorkspaceId = _activeWorkspaceId;
@@ -7092,6 +7536,21 @@ namespace winrt::TerminalApp::implementation
         ++_workspaceDocumentVersion;
         _workspacePreviewWorkspaceId = _activeWorkspaceId;
         _workspacePreviewPath = path;
+        if (_workspaceEditorEnabled)
+        {
+            const auto document = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) {
+                return value.workspaceId == _activeWorkspaceId && value.path == path;
+            });
+            if (document != _workspaceDocuments.end())
+            {
+                _ReadWorkspaceEditorDocument(*document);
+                _SendWorkspaceEditorDocument(*document);
+                _SendWorkspaceEditorMessage(L"activate", document->id);
+                WorkspaceDocumentStatus().Text(document->readOnlyReason.empty() ? winrt::hstring{ path.native() } : document->readOnlyReason);
+                WorkspaceDocumentLineStatus().Text(L"");
+            }
+            return;
+        }
         const auto editor = WorkspaceDocumentEditor();
         _workspaceDocumentLineCount = 0;
         WorkspaceDocumentLineStatus().Text(L"");
@@ -7170,6 +7629,19 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_ApplyWorkspaceDocumentTheme()
     try
     {
+        if (_workspaceEditorEnabled)
+        {
+            if (_workspaceEditorReady)
+            {
+                using namespace Windows::Data::Json;
+                JsonObject message;
+                message.Insert(L"version", JsonValue::CreateNumberValue(1));
+                message.Insert(L"type", JsonValue::CreateStringValue(L"theme"));
+                message.Insert(L"theme", JsonValue::CreateStringValue(WorkspaceEditorSurface().ActualTheme() == ElementTheme::Light ? L"vs" : L"vs-dark"));
+                WorkspaceEditorMessage.raise(*this, message.Stringify());
+            }
+            return;
+        }
         // Invalidate pending batches before changing the palette. Reformat the
         // displayed text so cached previews retain their contents and selection.
         const auto version = ++_workspaceDocumentVersion;
@@ -7340,7 +7812,7 @@ namespace winrt::TerminalApp::implementation
             {
                 _LoadWorkspaceDocument(document->path);
             }
-            WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+            _FocusWorkspaceDocument();
         }
     }
 
@@ -7352,6 +7824,11 @@ namespace winrt::TerminalApp::implementation
         });
         if (document == _workspaceDocuments.end())
         {
+            return;
+        }
+        if (_workspaceEditorEnabled)
+        {
+            _CloseWorkspaceDocument(document->id);
             return;
         }
         if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && workspace->selectedDocument == document->path)
@@ -7569,6 +8046,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_ShowWorkspaceHub()
     {
+        WorkspaceEditorSurface().Visibility(Visibility::Collapsed);
         _RefreshWorkspaceHub();
         WorkspaceHub().Visibility(Visibility::Visible);
         SideTabLayout().Visibility(_tabPosition == TabPosition::Left ? Visibility::Visible : Visibility::Collapsed);
@@ -7584,6 +8062,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
         WorkspaceHub().Visibility(Visibility::Collapsed);
+        WorkspaceEditorSurface().Visibility(_workspaceEditorEnabled ? Visibility::Visible : Visibility::Collapsed);
         SideTabLayout().Visibility(Visibility::Visible);
         _UpdateTabView();
     }

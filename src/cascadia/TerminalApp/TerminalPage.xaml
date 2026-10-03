@@ -172,6 +172,12 @@
                                  GotFocus="_WorkspaceDocumentGotFocus"
                                  SelectionChanged="_WorkspaceDocumentCaretChanged"
                                  TextWrapping="NoWrap" />
+                    <Border x:Name="WorkspaceEditorSurface"
+                            Grid.Row="1"
+                            Margin="8,0,8,4"
+                            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                            ActualThemeChanged="_WorkspaceDocumentThemeChanged"
+                            Visibility="Collapsed" />
                     <Grid Grid.Row="2"
                           Margin="12,2,8,8">
                         <Grid.ColumnDefinitions>

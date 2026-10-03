@@ -1263,6 +1263,26 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    void TerminalWindow::SetWorkspaceEditorEnabled(const bool enabled)
+    {
+        _root->SetWorkspaceEditorEnabled(enabled);
+    }
+
+    UIElement TerminalWindow::GetWorkspaceEditorSurface()
+    {
+        return _root->GetWorkspaceEditorSurface();
+    }
+
+    void TerminalWindow::HandleWorkspaceEditorMessage(const winrt::hstring& message)
+    {
+        _root->HandleWorkspaceEditorMessage(message);
+    }
+
+    void TerminalWindow::WorkspaceEditorFocused()
+    {
+        _root->WorkspaceEditorFocused();
+    }
+
     void TerminalWindow::WindowName(const winrt::hstring& name)
     {
         const auto oldIsQuakeMode = _WindowProperties->IsQuakeWindow();

@@ -63,6 +63,7 @@
     <ClInclude Include="WindowsPackageManagerFactory.h" />
     <ClInclude Include="TerminalSettingsCache.h" />
     <ClInclude Include="WorkspaceSyntaxHighlighter.h" />
+    <ClInclude Include="WorkspaceEditorBuffer.h" />
   </ItemGroup>
   <ItemGroup>
     <Midl Include="AppLogic.idl">

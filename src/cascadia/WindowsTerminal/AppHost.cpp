@@ -327,9 +327,11 @@ void AppHost::Initialize()
     // set that content as well.
 #ifdef SANSTERMINAL_EDITOR_PROBE
     wchar_t probeEnabled[2]{};
-    if (GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1')
+    wchar_t workspaceEditorEnabled[2]{};
+    const auto workspaceEditor = GetEnvironmentVariableW(L"SANSTERMINAL_WORKSPACE_EDITOR", workspaceEditorEnabled, ARRAYSIZE(workspaceEditorEnabled)) == 1 && workspaceEditorEnabled[0] == L'1';
+    if (workspaceEditor || (GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1'))
     {
-        _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
+        _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); }, workspaceEditor);
         _window->SetContent(_editorProbe->CreateContent());
     }
     else

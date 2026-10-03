@@ -1474,7 +1474,7 @@ namespace winrt::TerminalApp::implementation
                  (!tab || (workspace && !workspace->preferTerminalInCompactView) ||
                   (terminalWidth.GridUnitType == GridUnitType::Pixel && terminalWidth.Value == 0)))
         {
-            WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+            _FocusWorkspaceDocument();
         }
         else if (tab)
         {

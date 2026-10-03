@@ -223,6 +223,11 @@ namespace winrt::TerminalApp::implementation
         bool FocusTab(const winrt::TerminalApp::Tab& tab);
         void FocusActiveTerminal();
 
+        void SetWorkspaceEditorEnabled(bool enabled);
+        Windows::UI::Xaml::UIElement GetWorkspaceEditorSurface();
+        void HandleWorkspaceEditorMessage(const winrt::hstring& message);
+        void WorkspaceEditorFocused();
+
         bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
         void AttachContent(Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::ActionAndArgs> args, uint32_t tabIndex);
@@ -235,6 +240,7 @@ namespace winrt::TerminalApp::implementation
         // -------------------------------- WinRT Events ---------------------------------
         til::typed_event<IInspectable, IInspectable> TitleChanged;
         til::typed_event<IInspectable, IInspectable> CloseWindowRequested;
+        til::typed_event<IInspectable, winrt::hstring> WorkspaceEditorMessage;
         til::typed_event<IInspectable, winrt::Windows::UI::Xaml::UIElement> SetTitleBarContent;
         til::typed_event<IInspectable, IInspectable> FocusModeChanged;
         til::typed_event<IInspectable, IInspectable> FullscreenChanged;
@@ -331,6 +337,19 @@ namespace winrt::TerminalApp::implementation
             std::filesystem::path path;
             Microsoft::UI::Xaml::Controls::TabViewItem tab{ nullptr };
             bool pinned{ false };
+            winrt::hstring id;
+            winrt::hstring text;
+            winrt::hstring savedText;
+            winrt::hstring readOnlyReason;
+            std::string originalBytes;
+            uint64_t revision{ 0 };
+            bool loaded{ false };
+            bool readOnly{ true };
+            bool dirty{ false };
+            bool utf16{ false };
+            bool bom{ false };
+            bool crlf{ false };
+            bool synchronizationFailed{ false };
         };
         std::vector<WorkspaceSession> _workspaces;
         std::vector<WorkspaceNavigationEntry> _workspaceNavigationEntries;
@@ -338,6 +357,13 @@ namespace winrt::TerminalApp::implementation
         std::vector<WorkspaceFileEntry> _workspaceFileEntries;
         std::vector<std::filesystem::path> _workspaceSearchResults;
         std::vector<WorkspaceDocument> _workspaceDocuments;
+        bool _workspaceEditorEnabled{ false };
+        bool _workspaceEditorReady{ false };
+        bool _displayingDocumentCloseDialog{ false };
+        uint64_t _nextWorkspaceDocumentId{ 0 };
+        uint64_t _nextWorkspaceEditorFlushId{ 0 };
+        winrt::hstring _workspaceEditorFlushId;
+        bool _workspaceEditorSynchronizationFailed{ false };
         winrt::hstring _activeWorkspaceId;
         bool _changingWorkspace{ false };
         bool _updatingDocumentTabs{ false };
@@ -390,6 +416,14 @@ namespace winrt::TerminalApp::implementation
         void _OpenWorkspaceDocument(const std::filesystem::path& path, bool pin);
         void _RefreshWorkspaceDocumentTabs();
         void _LoadWorkspaceDocument(const std::filesystem::path& path);
+        WorkspaceDocument* _FindWorkspaceDocument(const winrt::hstring& id);
+        void _ReadWorkspaceEditorDocument(WorkspaceDocument& document);
+        bool _SaveWorkspaceEditorDocument(WorkspaceDocument& document);
+        void _SendWorkspaceEditorDocument(const WorkspaceDocument& document);
+        void _SendWorkspaceEditorMessage(const winrt::hstring& type, const winrt::hstring& id = {});
+        void _FocusWorkspaceDocument();
+        Windows::Foundation::IAsyncOperation<bool> _ConfirmWorkspaceEditorClose(winrt::hstring workspaceId = {}, winrt::hstring documentId = {});
+        safe_void_coroutine _CloseWorkspaceDocument(winrt::hstring id);
         void _ApplyWorkspaceDocumentTheme();
         void _WorkspaceDocumentThemeChanged(const Windows::UI::Xaml::FrameworkElement& sender, const IInspectable& args);
         safe_void_coroutine _ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, bool dark, uint64_t version);

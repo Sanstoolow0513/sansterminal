@@ -97,6 +97,10 @@ namespace winrt::TerminalApp::implementation
         void IdentifyWindow();
         bool FocusTab(const winrt::TerminalApp::Tab& tab);
         void FocusActiveTerminal();
+        void SetWorkspaceEditorEnabled(bool enabled);
+        Windows::UI::Xaml::UIElement GetWorkspaceEditorSurface();
+        void HandleWorkspaceEditorMessage(const winrt::hstring& message);
+        void WorkspaceEditorFocused();
 
         std::optional<uint32_t> LoadPersistedLayoutIdx() const;
         winrt::Microsoft::Terminal::Settings::Model::WindowLayout LoadPersistedLayout();
@@ -218,6 +222,7 @@ namespace winrt::TerminalApp::implementation
         FORWARDED_TYPED_EVENT(SetTitleBarContent, winrt::Windows::Foundation::IInspectable, winrt::Windows::UI::Xaml::UIElement, _root, SetTitleBarContent);
         FORWARDED_TYPED_EVENT(TitleChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, TitleChanged);
         FORWARDED_TYPED_EVENT(CloseWindowRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, CloseWindowRequested);
+        FORWARDED_TYPED_EVENT(WorkspaceEditorMessage, winrt::Windows::Foundation::IInspectable, winrt::hstring, _root, WorkspaceEditorMessage);
         til::typed_event<winrt::Windows::Foundation::IInspectable, bool> DialogVisibilityChanged;
         FORWARDED_TYPED_EVENT(FocusModeChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FocusModeChanged);
         FORWARDED_TYPED_EVENT(FullscreenChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FullscreenChanged);

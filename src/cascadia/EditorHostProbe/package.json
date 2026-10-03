@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --experimental-vm-modules --test editor.test.mjs"
+    "test": "node --experimental-vm-modules --test editor.test.mjs workspace.test.mjs",
+    "test:browser": "node browser-smoke.mjs"
   },
   "dependencies": {
     "monaco-editor": "0.57.0"

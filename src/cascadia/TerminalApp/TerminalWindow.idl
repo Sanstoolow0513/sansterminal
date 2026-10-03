@@ -80,6 +80,11 @@ namespace TerminalApp
         void IdentifyWindow();
         Boolean FocusTab(TerminalApp.Tab tab);
         void FocusActiveTerminal();
+        void SetWorkspaceEditorEnabled(Boolean enabled);
+        Windows.UI.Xaml.UIElement GetWorkspaceEditorSurface();
+        void HandleWorkspaceEditorMessage(String message);
+        void WorkspaceEditorFocused();
+        event Windows.Foundation.TypedEventHandler<Object, String> WorkspaceEditorMessage;
         void SetPersistedLayoutIdx(UInt32 idx);
         void RequestExitFullscreen();
 

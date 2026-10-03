@@ -84,6 +84,9 @@ File previews currently show at most the first 512 KiB. Editing, saving, and fil
 watching are not yet implemented, and file tree and document context are retained
 only within the current app session. The optional [Monaco editor host
 probe](./doc/editor-host-probe.md) is a developer experiment, disabled by default.
+This verification branch also provides an opt-in [WebView workspace editor
+integration](./doc/webview-editor-integration.md) with native document buffers
+and file saving.
 See [Workspace implementation and plans](./doc/workspace-mvp.md) for details.
 
 ## Trying Sansterminal

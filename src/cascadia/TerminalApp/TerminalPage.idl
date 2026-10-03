@@ -87,6 +87,12 @@ namespace TerminalApp
         WindowProperties WindowProperties { get; };
         void IdentifyWindow();
 
+        void SetWorkspaceEditorEnabled(Boolean enabled);
+        Windows.UI.Xaml.UIElement GetWorkspaceEditorSurface();
+        void HandleWorkspaceEditorMessage(String message);
+        void WorkspaceEditorFocused();
+        event Windows.Foundation.TypedEventHandler<Object, String> WorkspaceEditorMessage;
+
         String SavedActionName { get; };
         String SavedActionKeyChord { get; };
         String SavedActionCommandLine { get; };

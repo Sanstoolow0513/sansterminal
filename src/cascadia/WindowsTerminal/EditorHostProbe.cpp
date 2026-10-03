@@ -6,6 +6,7 @@
 #include <fstream>
 #include <wrl.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Data.Json.h>
 
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
@@ -16,10 +17,11 @@ namespace
 {
     constexpr auto origin = L"editor-probe.sansterminal.invalid";
     constexpr auto pageUri = L"https://editor-probe.sansterminal.invalid/index.html";
+    constexpr auto workspacePageUri = L"https://editor-probe.sansterminal.invalid/index.html?workspace=1";
 }
 
-EditorHostProbe::EditorHostProbe(HWND parent, HWND island, winrt::TerminalApp::TerminalWindow logic, std::function<void()> focusXaml) :
-    _parent{ parent }, _island{ island }, _logic{ std::move(logic) }, _focusXaml{ std::move(focusXaml) }
+EditorHostProbe::EditorHostProbe(HWND parent, HWND island, winrt::TerminalApp::TerminalWindow logic, std::function<void()> focusXaml, bool workspace) :
+    _parent{ parent }, _island{ island }, _logic{ std::move(logic) }, _focusXaml{ std::move(focusXaml) }, _workspace{ workspace }
 {
     _assets = std::filesystem::path{ wil::GetModuleFileNameW<std::wstring>(nullptr) }.parent_path() / L"EditorHostProbe";
     std::filesystem::path cache;
@@ -40,7 +42,7 @@ EditorHostProbe::EditorHostProbe(HWND parent, HWND island, winrt::TerminalApp::T
     _log = _userData / L"probe.log";
     _nativeWindow.reset(CreateWindowExW(0, L"STATIC", L"Sansterminal EditorHostProbe", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 0, 0, _parent, nullptr, wil::GetModuleInstanceHandle(), nullptr));
     THROW_LAST_ERROR_IF_NULL(_nativeWindow.get());
-    _Report(L"created: one host; offline scratch buffers; no project file writes");
+    _Report(_workspace ? L"created: one workspace editor host; native document bridge" : L"created: one host; offline scratch buffers; no project file writes");
 }
 
 EditorHostProbe::~EditorHostProbe()
@@ -51,74 +53,100 @@ EditorHostProbe::~EditorHostProbe()
 UIElement EditorHostProbe::CreateContent()
 {
     const auto weak = weak_from_this();
-    _layout = Grid{};
-    RowDefinition toolbarRow;
-    toolbarRow.Height(GridLengthHelper::Auto());
-    _layout.RowDefinitions().Append(toolbarRow);
-    _layout.RowDefinitions().Append(RowDefinition{});
-    _layout.ColumnDefinitions().Append(ColumnDefinition{});
-    ColumnDefinition dividerColumn;
-    dividerColumn.Width(GridLengthHelper::FromPixels(6));
-    _layout.ColumnDefinitions().Append(dividerColumn);
-    _editorColumn = ColumnDefinition{};
-    _editorColumn.Width(GridLengthHelper::FromPixels(_width));
-    _layout.ColumnDefinitions().Append(_editorColumn);
+    if (_workspace)
+    {
+        _logic.SetWorkspaceEditorEnabled(true);
+        _layout = _logic.GetRoot().as<FrameworkElement>();
+        _surface = _logic.GetWorkspaceEditorSurface().as<Border>();
+        _status = TextBlock{};
+        _status.Text(L"正在加载离线编辑器…");
+        _status.TextWrapping(TextWrapping::Wrap);
+        _status.Margin(ThicknessHelper::FromUniformLength(12));
+        _surface.Child(_status);
+        _workspaceMessage = _logic.WorkspaceEditorMessage(winrt::auto_revoke, [weak](auto&&, const winrt::hstring& message) {
+            if (const auto self = weak.lock(); self && !self->_closed)
+            {
+                const auto json = winrt::Windows::Data::Json::JsonObject::Parse(message);
+                const auto type = json.GetNamedString(L"type", L"");
+                if (type == L"focus-editor" || type == L"focus")
+                    self->_FocusEditor();
+                else if (self->_ready && self->_webview)
+                    LOG_IF_FAILED(self->_webview->PostWebMessageAsJson(message.c_str()));
+            }
+        });
+    }
+    else
+    {
+        Grid layout;
+        _layout = layout;
+        RowDefinition toolbarRow;
+        toolbarRow.Height(GridLengthHelper::Auto());
+        layout.RowDefinitions().Append(toolbarRow);
+        layout.RowDefinitions().Append(RowDefinition{});
+        layout.ColumnDefinitions().Append(ColumnDefinition{});
+        ColumnDefinition dividerColumn;
+        dividerColumn.Width(GridLengthHelper::FromPixels(6));
+        layout.ColumnDefinitions().Append(dividerColumn);
+        _editorColumn = ColumnDefinition{};
+        _editorColumn.Width(GridLengthHelper::FromPixels(_width));
+        layout.ColumnDefinitions().Append(_editorColumn);
 
-    StackPanel toolbar;
-    toolbar.Orientation(Orientation::Horizontal);
-    Grid::SetColumnSpan(toolbar, 3);
-    _layout.Children().Append(toolbar);
-    const auto addButton = [&](std::wstring_view label, auto handler) {
-        Button button;
-        button.Content(winrt::box_value(winrt::hstring{ label }));
-        button.Margin(ThicknessHelper::FromUniformLength(4));
-        button.Click(handler);
-        toolbar.Children().Append(button);
-    };
-    addButton(L"Editor probe: show/hide", [weak](auto&&, auto&&) {
-        if (const auto self = weak.lock())
-        {
-            self->_shown = !self->_shown;
-            self->_SyncBounds();
-        }
-    });
-    addButton(L"Focus editor", [weak](auto&&, auto&&) {
-        if (const auto self = weak.lock())
-            self->_FocusEditor();
-    });
-    addButton(L"XAML dialog", [weak](auto&&, auto&&) {
-        if (const auto self = weak.lock())
-            self->_ShowDialog();
-    });
-    addButton(L"Self-test", [weak](auto&&, auto&&) {
-        if (const auto self = weak.lock(); self && self->_ready)
-            LOG_IF_FAILED(self->_webview->PostWebMessageAsString(L"run-smoke"));
-    });
+        StackPanel toolbar;
+        toolbar.Orientation(Orientation::Horizontal);
+        Grid::SetColumnSpan(toolbar, 3);
+        layout.Children().Append(toolbar);
+        const auto addButton = [&](std::wstring_view label, auto handler) {
+            Button button;
+            button.Content(winrt::box_value(winrt::hstring{ label }));
+            button.Margin(ThicknessHelper::FromUniformLength(4));
+            button.Click(handler);
+            toolbar.Children().Append(button);
+        };
+        addButton(L"Editor probe: show/hide", [weak](auto&&, auto&&) {
+            if (const auto self = weak.lock())
+            {
+                self->_shown = !self->_shown;
+                self->_SyncBounds();
+            }
+        });
+        addButton(L"Focus editor", [weak](auto&&, auto&&) {
+            if (const auto self = weak.lock())
+                self->_FocusEditor();
+        });
+        addButton(L"XAML dialog", [weak](auto&&, auto&&) {
+            if (const auto self = weak.lock())
+                self->_ShowDialog();
+        });
+        addButton(L"Self-test", [weak](auto&&, auto&&) {
+            if (const auto self = weak.lock(); self && self->_ready)
+                LOG_IF_FAILED(self->_webview->PostWebMessageAsString(L"run-smoke"));
+        });
 
-    const auto terminal = _logic.GetRoot().as<FrameworkElement>();
-    Grid::SetRow(terminal, 1);
-    _layout.Children().Append(terminal);
-    Primitives::Thumb divider;
-    divider.Background(Media::SolidColorBrush{ winrt::Windows::UI::Colors::Gray() });
-    Grid::SetColumn(divider, 1);
-    Grid::SetRow(divider, 1);
-    divider.DragDelta([weak](auto&&, const Primitives::DragDeltaEventArgs& args) {
-        if (const auto self = weak.lock())
-        {
-            self->_width = std::clamp(self->_width - args.HorizontalChange(), 160.0, std::max(160.0, self->_layout.ActualWidth() - 240.0));
-            self->_SyncBounds();
-        }
-    });
-    _layout.Children().Append(divider);
-    _surface = Border{};
-    _status = TextBlock{};
-    _status.Text(L"Loading offline Monaco. Scratch buffers only; no save operation.");
-    _status.TextWrapping(TextWrapping::Wrap);
-    _status.Margin(ThicknessHelper::FromUniformLength(12));
-    _surface.Child(_status);
-    Grid::SetRow(_surface, 1);
-    Grid::SetColumn(_surface, 2);
-    _layout.Children().Append(_surface);
+        const auto terminal = _logic.GetRoot().as<FrameworkElement>();
+        Grid::SetRow(terminal, 1);
+        layout.Children().Append(terminal);
+        Primitives::Thumb divider;
+        divider.Background(Media::SolidColorBrush{ winrt::Windows::UI::Colors::Gray() });
+        Grid::SetColumn(divider, 1);
+        Grid::SetRow(divider, 1);
+        divider.DragDelta([weak](auto&&, const Primitives::DragDeltaEventArgs& args) {
+            if (const auto self = weak.lock())
+            {
+                self->_width = std::clamp(self->_width - args.HorizontalChange(), 160.0, std::max(160.0, self->_layout.ActualWidth() - 240.0));
+                self->_SyncBounds();
+            }
+        });
+        layout.Children().Append(divider);
+        _surface = Border{};
+        _status = TextBlock{};
+        _status.Text(L"Loading offline Monaco. Scratch buffers only; no save operation.");
+        _status.TextWrapping(TextWrapping::Wrap);
+        _status.Margin(ThicknessHelper::FromUniformLength(12));
+        _surface.Child(_status);
+        Grid::SetRow(_surface, 1);
+        Grid::SetColumn(_surface, 2);
+        layout.Children().Append(_surface);
+    }
     _loaded = _layout.Loaded(winrt::auto_revoke, [weak](auto&&, auto&&) {
         if (const auto self = weak.lock())
             self->_Start();
@@ -215,10 +243,11 @@ try
     RETURN_IF_FAILED(settings->put_IsStatusBarEnabled(FALSE));
 
     ::EventRegistrationToken token{};
-    RETURN_IF_FAILED(_webview->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>([](auto*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+    const auto allowedPage = _workspace ? workspacePageUri : pageUri;
+    RETURN_IF_FAILED(_webview->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>([allowedPage](auto*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
                                                           wil::unique_cotaskmem_string uri;
                                                           RETURN_IF_FAILED(args->get_Uri(&uri));
-                                                          return args->put_Cancel(std::wstring_view{ uri.get() } != pageUri);
+                                                          return args->put_Cancel(std::wstring_view{ uri.get() } != allowedPage);
                                                       }).Get(),
                                                       &token));
     RETURN_IF_FAILED(_webview->add_FrameNavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>([](auto*, auto* args) -> HRESULT { return args->put_Cancel(TRUE); }).Get(), &token));
@@ -234,8 +263,10 @@ try
                                                           wil::unique_cotaskmem_string source;
                                                           wil::unique_cotaskmem_string text;
                                                           RETURN_IF_FAILED(args->get_Source(&source));
-                                                          if (std::wstring_view{ source.get() } != pageUri)
+                                                          if (std::wstring_view{ source.get() } != (self->_workspace ? workspacePageUri : pageUri))
                                                               return E_ACCESSDENIED;
+                                                          if (self->_workspace)
+                                                              return self->_HandleWorkspaceMessage(args);
                                                           RETURN_IF_FAILED(args->TryGetWebMessageAsString(&text));
                                                           const std::wstring_view message{ text.get() };
                                                           if (message.size() > 1024)
@@ -264,7 +295,11 @@ try
                                                  &token));
     RETURN_IF_FAILED(controller->add_GotFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak](auto*, auto*) -> HRESULT {
                                                   if (const auto self = weak.lock())
+                                                  {
                                                       self->_focused = true;
+                                                      if (self->_workspace)
+                                                          self->_logic.WorkspaceEditorFocused();
+                                                  }
                                                   return S_OK;
                                               }).Get(),
                                               &token));
@@ -287,7 +322,50 @@ try
     _bounds = {};
     _visible = false;
     _SyncBounds();
-    RETURN_IF_FAILED(_webview->Navigate(pageUri));
+    RETURN_IF_FAILED(_webview->Navigate(allowedPage));
+    return S_OK;
+}
+CATCH_RETURN();
+
+HRESULT EditorHostProbe::_HandleWorkspaceMessage(ICoreWebView2WebMessageReceivedEventArgs* args)
+try
+{
+    using namespace winrt::Windows::Data::Json;
+    wil::unique_cotaskmem_string raw;
+    RETURN_IF_FAILED(args->get_WebMessageAsJson(&raw));
+    // Document content is capped separately by the native document service.
+    // Check size before parsing, including all JSON string escaping overhead.
+    if (std::wstring_view{ raw.get() }.size() > 16 * 1024 * 1024)
+        return E_INVALIDARG;
+    const auto message = JsonObject::Parse(raw.get());
+    if (message.GetNamedNumber(L"version", 0) != 1)
+        return E_INVALIDARG;
+    const auto type = message.GetNamedString(L"type", L"");
+    if (type == L"focus-terminal")
+        _FocusTerminal();
+    else if (type == L"focused")
+        _logic.WorkspaceEditorFocused();
+    else if (type == L"show-dialog")
+        _ShowDialog();
+    else if (type == L"report")
+    {
+        const auto diagnostic = message.GetNamedString(L"message", L"");
+        const std::wstring_view diagnosticView{ diagnostic };
+        if (diagnostic.size() > 1024 || !(diagnosticView.starts_with(L"smoke-") || diagnosticView.starts_with(L"page-error:")))
+            return E_INVALIDARG;
+        _Report(diagnostic);
+    }
+    else if (type == L"ready" || type == L"changed" || type == L"save" || type == L"flushed" || type == L"sync-error")
+    {
+        if (type == L"ready")
+        {
+            _ready = true;
+            _Report(L"ready: workspace document bridge");
+        }
+        _logic.HandleWorkspaceEditorMessage(raw.get());
+    }
+    else
+        return E_INVALIDARG;
     return S_OK;
 }
 CATCH_RETURN();
@@ -297,14 +375,23 @@ try
 {
     if (_closed || !_layout)
         return;
-    const auto width = _shown ? std::min(_width, std::max(0.0, _layout.ActualWidth() - 240.0)) : 0.0;
-    if (_editorColumn.Width().Value != width)
-        _editorColumn.Width(GridLengthHelper::FromPixels(width));
+    if (!_workspace)
+    {
+        const auto width = _shown ? std::min(_width, std::max(0.0, _layout.ActualWidth() - 240.0)) : 0.0;
+        if (_editorColumn.Width().Value != width)
+            _editorColumn.Width(GridLengthHelper::FromPixels(width));
+    }
     const auto root = _layout.XamlRoot();
     if (!root)
         return;
     const auto popup = Media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root).Size() != 0;
-    const auto visible = _controller && !_failed && _shown && !_modal && !popup && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0 && !IsIconic(_parent);
+    bool ancestorsVisible = _surface.IsLoaded();
+    for (DependencyObject element = _surface; element && ancestorsVisible; element = Media::VisualTreeHelper::GetParent(element))
+    {
+        if (const auto visual = element.try_as<UIElement>())
+            ancestorsVisible = visual.Visibility() == Visibility::Visible;
+    }
+    const auto visible = _controller && !_failed && _shown && !_modal && !popup && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0 && !IsIconic(_parent);
     if (_visible != visible)
     {
         _visible = visible;
@@ -370,6 +457,7 @@ winrt::fire_and_forget EditorHostProbe::_FocusEditor()
     try
     {
         co_await wil::resume_foreground(_layout.Dispatcher(), winrt::Windows::UI::Core::CoreDispatcherPriority::Low);
+        _SyncBounds();
         if (_closed || !_visible || !_controller)
             co_return;
         LOG_IF_FAILED(_controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC));
@@ -404,11 +492,53 @@ void EditorHostProbe::_Fail(HRESULT result)
 {
     _ready = false;
     _failed = true;
+    if (_workspace)
+        _logic.HandleWorkspaceEditorMessage(L"{\"version\":1,\"type\":\"unavailable\"}");
     if (_controller)
         _controller->put_IsVisible(FALSE);
     ShowWindow(_nativeWindow.get(), SW_HIDE);
     _Report(std::wstring{ L"host-error: " } + std::wstring{ winrt::hresult_error{ result }.message() });
-    _status.Text(L"Editor probe failed. See LocalCache/Sansterminal/EditorHostProbe/*/probe.log. The terminal remains available.");
+    if (_workspace)
+    {
+        _status = TextBlock{};
+        _status.TextWrapping(TextWrapping::Wrap);
+        _status.Margin(ThicknessHelper::FromUniformLength(12));
+        _status.Text(L"编辑器加载失败。文档缓冲区仍保留在当前窗口，可重新加载编辑器。详情见 LocalCache/Sansterminal/EditorHostProbe/*/probe.log。");
+        StackPanel recovery;
+        recovery.Children().Append(_status);
+        Button retry;
+        retry.Content(winrt::box_value(L"重新加载编辑器"));
+        const auto weak = weak_from_this();
+        retry.Click([weak](auto&&, auto&&) {
+            if (const auto self = weak.lock())
+                self->_Reload();
+        });
+        recovery.Children().Append(retry);
+        _surface.Child(recovery);
+    }
+    else
+        _status.Text(L"Editor probe failed. See LocalCache/Sansterminal/EditorHostProbe/*/probe.log. The terminal remains available.");
+}
+
+void EditorHostProbe::_Reload()
+{
+    if (_closed)
+        return;
+    if (_controller)
+        LOG_IF_FAILED(_controller->Close());
+    _webview.reset();
+    _controller.reset();
+    _environment.reset();
+    _failed = false;
+    _started = false;
+    _visible = false;
+    _status = TextBlock{};
+    _status.TextWrapping(TextWrapping::Wrap);
+    _status.Margin(ThicknessHelper::FromUniformLength(12));
+    _status.Text(L"正在重新加载编辑器…");
+    _surface.Child(_status);
+    _Report(L"reload: replay native document buffers; undo history resets");
+    _Start();
 }
 
 void EditorHostProbe::Close() noexcept
@@ -418,6 +548,7 @@ void EditorHostProbe::Close() noexcept
     _loaded.revoke();
     _layoutUpdated.revoke();
     _dialogVisibility.revoke();
+    _workspaceMessage.revoke();
     _popupTimer.Destroy();
     if (_controller)
         LOG_IF_FAILED(_controller->Close());
