@@ -25,7 +25,7 @@ Author(s):
 #include "Theme.h"
 #include "NewTabMenuEntry.h"
 #include "RemainingProfilesEntry.h"
-#include "WorkspaceLayout.h"
+#include "WorkspaceLayoutDefaults.h"
 
 // fwdecl unittest classes
 namespace SettingsModelUnitTests

@@ -22,6 +22,7 @@ await build({
 });
 await Promise.all([
   copyFile('index.html', 'dist/index.html'),
+  copyFile('index.html', 'dist/workspace.html'),
   copyFile('node_modules/monaco-editor/LICENSE', 'dist/LICENSE.monaco.txt'),
   copyFile('node_modules/monaco-editor/ThirdPartyNotices.txt', 'dist/ThirdPartyNotices.monaco.txt'),
 ]);

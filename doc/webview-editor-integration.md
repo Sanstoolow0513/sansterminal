@@ -37,7 +37,7 @@ msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Config
 | TerminalPage | 文档身份及已授权路径、标签和布局、异步服务调度、消息验证、关闭同步和未保存提示 |
 | WorkspaceLayout.h / WorkspaceLayoutPage | 共用布局树、隐藏叶子折叠和分隔线几何；设置克隆上的组合、预览、比例及独立显隐 |
 | TerminalWindow | 向窗口宿主提供编辑区域和消息事件 |
-| AppHost / EditorHostProbe | 每窗口一个原生 HWND / WebView2 controller、离线资源、来源检查、JSON 消息传输、原生焦点、弹层和释放 |
+| AppHost / WorkspaceEditorHost | 每窗口一个原生 HWND / WebView2 controller、离线资源、来源检查、JSON 消息传输、原生焦点、弹层和释放；EditorHostProbe 派生类仅用于诊断 |
 | Monaco | 每文档一个 Model、视图位置、撤销历史、语言 worker，以及内置扩展命令 |
 
 桥接协议版本为 `1`。原生端发送 `open / activate / close / saved / error`；前端发送 `ready / changed / save`。关闭前使用 `flush / flushed / resume` 同步最新缓冲区并暂时冻结编辑，超时取消关闭。文档消息使用原生端分配的身份；网页没有按任意路径读写文件或执行 shell 命令的接口。消息来源必须完全匹配应用的虚拟 HTTPS 页面，且有类型和长度限制。资源映射仅指向随应用打包的编辑器目录。
@@ -50,7 +50,11 @@ msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Config
 
 保存前重新比较原始磁盘字节和文件身份，发现外部修改或同内容替换也拒绝覆盖并保留缓冲区。写入使用同目录临时文件和原子替换，替换前再次校验；保留原文件备份以处理替换失败，恢复失败会留下恢复文件并报告路径。这不是文件系统的原子比较并交换，其他程序恰在最终比对后替换路径的竞态仍存在。没有文件监听、自动合并、另存为或跨窗口共享缓冲；同一文件在其他窗口打开时仍检查保存冲突。
 
-文件读取、编码和保存在后台执行。保存确认对应所提交的文本与版本快照；期间继续编辑的内容仍保持未保存，下次保存使用更新后的磁盘基线。每次内容变化仍向原生端发送完整文本，增量通信留待后续优化。关闭会等待进行中的保存；同步超时、内容超限或服务失败会取消关闭。
+文件读取、编码和保存在后台执行。保存确认对应所提交的文本与版本快照；期间继续编辑的内容仍保持未保存，下次保存使用更新后的磁盘基线。每次内容变化仍向原生端发送完整文本，增量通信留待后续优化。关闭会等待进行中的保存；编辑器仍可用时，同步超时或内容超限会取消关闭。若同步失败后宿主退出，独立的 EditorSession / DocumentSynchronization 保留内容丢失状态，关闭提供明确的放弃／取消；重新加载和重放原生快照不会清除此状态。确认框显示完整路径，以区分同名文件。
+
+文件只读检查读取 reparse tag，禁止符号链接及其他 name-surrogate 重解析点，允许可读取的 Cloud Files 占位文件。原子保存的临时文件和恢复副本使用独立的短同目录文件名，避免合法长文件名追加后缀后超过 NTFS 限制。文件系统实现位于 WorkspaceEditorBuffer.cpp / WorkspaceDocument.cpp；布局 JSON 在 WorkspaceLayout.cpp 通过 jsoncpp 解析，设置分层直接传入 Json::Value。
+
+生产页面使用 `workspace.html`，诊断页面使用 `index.html`。WebView2 用户目录复用 `LocalCache/Sansterminal/WorkspaceEditor`（生产）或 `LocalCache/Sansterminal/EditorHostProbe`（诊断），不再逐窗口创建 GUID 目录；多个窗口各自持有 controller 和内存中的文档。旧 GUID 目录不会自动删除。日志位于对应目录的 `probe.log`。
 
 ## 扩展性判断
 
@@ -62,7 +66,13 @@ msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Config
 
 目前 Model URI 包含工作区、文档身份和文件名，没有完整源目录树；JSON、TypeScript、CSS 和 HTML worker 已打包，但跨文件 TypeScript import 解析和整个项目的语义服务尚未验证。
 
-## 当前验收（2026-10-03，可组合布局与默认编辑器）
+## 合入前修复验证（2026-10-03）
+
+原生回归覆盖 234／255 字符文件名的两次保存及辅助文件清理、符号链接只读、保存冲突和同步失败后的宿主退出／重新连接。布局测试通过 48 种组合、1,536 个几何／显隐用例以及 Json::Value 往返和非法输入；前端 20 项测试、真实 Chromium 的 Monaco／worker 冒烟测试及两个 `*WorkspaceLayout*` TAEF 用例通过。完整 TAEF 和窗口 UI 自动化未重跑。
+
+Cloud Files 集成测试尝试在独立临时目录注册同步根；本机转换 API 返回成功却未创建 reparse point，因此明确跳过此用例，仍需真实 OneDrive／Cloud Files 环境验证。接近 2 MiB 的转义文本经过真实 WebView2 `PostWebMessageAsJson` 的端到端验证仍待完成。本次构建未部署到开发包。
+
+## 此前验收（2026-10-03，可组合布局与默认编辑器）
 
 配置为 `x64 Debug`。本轮代码的开发包、TestHostApp 和 SettingsModel 测试项目已构建通过，最新版已通过 `DeployAppRecipe.exe` 部署。主程序、TerminalApp、设置模型、设置页面 DLL、资源 PRI 和新页面 XBF 均与 MSIX 内文件的 SHA256 一致。部署后再次验证了独立首页、布局设置入口及关闭设置返回首页，未改动开发包的用户配置。
 
@@ -104,8 +114,7 @@ msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Config
 文件读写测试直接包含生产代码，可以在已设置开发环境的 PowerShell 中运行：
 
 ```powershell
-cl /std:c++20 /EHsc /utf-8 /W4 /Fe:build\WorkspaceEditorBufferTests.exe /Fo:build\WorkspaceEditorBufferTests.obj tools\WorkspaceEditorBufferTests.cpp
-& .\build\WorkspaceEditorBufferTests.exe
+.\tools\Test-WorkspaceNative.ps1
 ```
 
 完整桌面验收使用独立便携副本及其全新测试配置，设置 `tabPosition: left` 并使用不运行实际任务的 shell profile。专用配置的 `actions` 与 `keybindings` 需要以下绑定；这些键只属于测试配置：

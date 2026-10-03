@@ -4,7 +4,7 @@ import { getTypeScriptWorker } from 'monaco-editor/language/typescript/monaco.co
 import { createWorkspace, createCommandRegistry, registerBundledCommands, protocolVersion } from './workspace.js';
 
 const bridge = window.chrome.webview;
-const workspaceMode = new URLSearchParams(window.location?.search ?? '').get('workspace') === '1';
+const workspaceMode = window.location?.pathname?.endsWith('/workspace.html') === true;
 const diagnosticMode = !workspaceMode || new URLSearchParams(window.location?.search ?? '').get('diagnostics') === '1';
 const send = (type, fields = {}) => bridge.postMessage(workspaceMode ? { version: protocolVersion, type, ...fields } : type);
 const status = document.querySelector('#status');

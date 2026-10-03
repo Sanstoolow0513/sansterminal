@@ -89,7 +89,8 @@ bool AppHost::OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, cons
 #ifdef SANSTERMINAL_EDITOR_HOST
     // The XAML focus tree still remembers the terminal while the native
     // browser owns focus. Do not deliver its shortcuts to that stale target.
-    if (_editorProbe && _editorProbe->HasFocus()) return false;
+    if (_editorHost && _editorHost->HasFocus())
+        return false;
 #endif
     if (_windowLogic)
     {
@@ -328,8 +329,11 @@ void AppHost::Initialize()
 #ifdef SANSTERMINAL_EDITOR_HOST
     wchar_t probeEnabled[2]{};
     const auto scratchProbe = GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1';
-    _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); }, !scratchProbe);
-    _window->SetContent(_editorProbe->CreateContent());
+    if (scratchProbe)
+        _editorHost = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
+    else
+        _editorHost = std::make_shared<WorkspaceEditorHost>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
+    _window->SetContent(_editorHost->CreateContent());
 #else
     _window->SetContent(_windowLogic.GetRoot());
 #endif
@@ -339,8 +343,9 @@ void AppHost::Initialize()
 void AppHost::Close()
 {
 #ifdef SANSTERMINAL_EDITOR_HOST
-    if (_editorProbe) _editorProbe->Close();
-    _editorProbe.reset();
+    if (_editorHost)
+        _editorHost->Close();
+    _editorHost.reset();
 #endif
     // After calling _window->Close() we should avoid creating more WinUI related actions.
     // I suspect WinUI wouldn't like that very much. As such unregister all event handlers first.

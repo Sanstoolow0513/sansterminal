@@ -1991,63 +1991,6 @@ namespace winrt::TerminalApp::implementation
         e.Handled(true);
     }
 
-    static bool workspaceGlobalAction(const ActionAndArgs& action)
-    {
-        if (!action)
-        {
-            return false;
-        }
-        switch (action.Action())
-        {
-        case ShortcutAction::NewTab:
-        case ShortcutAction::NewWindow:
-        case ShortcutAction::DuplicateTab:
-        case ShortcutAction::OpenNewTabDropdown:
-        case ShortcutAction::CloseTab:
-        case ShortcutAction::CloseOtherTabs:
-        case ShortcutAction::CloseTabsAfter:
-        case ShortcutAction::CloseWindow:
-        case ShortcutAction::NextTab:
-        case ShortcutAction::PrevTab:
-        case ShortcutAction::SwitchToTab:
-        case ShortcutAction::MoveTab:
-        case ShortcutAction::TabSearch:
-        case ShortcutAction::RestoreLastClosed:
-        case ShortcutAction::ToggleWorkspaceFiles:
-        case ShortcutAction::ToggleWorkspaceTerminal:
-        case ShortcutAction::ToggleWorkspaceEditor:
-        case ShortcutAction::ToggleWorkspaceTabs:
-        case ShortcutAction::OpenWorkspaceLayout:
-        case ShortcutAction::OpenSettings:
-        case ShortcutAction::OpenAbout:
-        case ShortcutAction::ToggleCommandPalette:
-        case ShortcutAction::ToggleFocusMode:
-        case ShortcutAction::ToggleFullscreen:
-        case ShortcutAction::ToggleAlwaysOnTop:
-        case ShortcutAction::SetFocusMode:
-        case ShortcutAction::SetFullScreen:
-        case ShortcutAction::SetMaximized:
-        case ShortcutAction::IdentifyWindow:
-        case ShortcutAction::IdentifyWindows:
-        case ShortcutAction::RenameWindow:
-        case ShortcutAction::OpenWindowRenamer:
-        case ShortcutAction::OpenSystemMenu:
-        case ShortcutAction::OpenWorkspace:
-        case ShortcutAction::Workspaces:
-        case ShortcutAction::Quit:
-            return true;
-        case ShortcutAction::MultipleActions:
-            if (const auto args = action.Args().try_as<MultipleActionsArgs>())
-            {
-                const auto actions = args.Actions();
-                return actions && std::all_of(actions.begin(), actions.end(), workspaceGlobalAction);
-            }
-            return false;
-        default:
-            return false;
-        }
-    }
-
     bool TerminalPage::_DispatchKeyBinding(const IInspectable& sender, const ActionAndArgs& action)
     {
         // Workspace chrome can retain a selected terminal while focus is on a
@@ -2055,7 +1998,7 @@ namespace winrt::TerminalApp::implementation
         if (sender == WorkspaceHub() || sender == WorkspaceFilesPanel() || sender == WorkspaceDocumentPanel() ||
             sender == WorkspaceNavigation() || sender == WorkspaceHeader() || sender == TabRow())
         {
-            if (!workspaceGlobalAction(action))
+            if (!_IsWorkspaceGlobalAction(action))
             {
                 return false;
             }
@@ -6985,12 +6928,12 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::SetWorkspaceEditorEnabled(const bool enabled)
     {
-        if (!enabled && std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.model.Dirty(); }))
+        if (!enabled && std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.model.Dirty() || document.synchronization.NeedsAttention(); }))
         {
             return;
         }
         _workspaceEditorEnabled = enabled;
-        _workspaceEditorReady = false;
+        _workspaceEditorSession.Unavailable();
         WorkspaceEditorSurface().Visibility(enabled && WorkspaceHub().Visibility() != Visibility::Visible ? Visibility::Visible : Visibility::Collapsed);
         _workspaceDisplayedPath.clear();
         _workspaceDisplayedWorkspaceId.clear();
@@ -7010,7 +6953,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_SendWorkspaceEditorMessage(const winrt::hstring& type, const winrt::hstring& id)
     {
-        if (!_workspaceEditorEnabled || !_workspaceEditorReady)
+        if (!_workspaceEditorEnabled || !_workspaceEditorSession.Ready())
         {
             return;
         }
@@ -7027,7 +6970,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_SendWorkspaceEditorDocument(const WorkspaceDocument& document)
     {
-        if (!_workspaceEditorEnabled || !_workspaceEditorReady || !document.model.loaded)
+        if (!_workspaceEditorEnabled || !_workspaceEditorSession.Ready() || !document.model.loaded)
         {
             return;
         }
@@ -7218,7 +7161,7 @@ namespace winrt::TerminalApp::implementation
         }
         if (serialized.size() > 16 * 1024 * 1024)
         {
-            _workspaceEditorSynchronizationFailed = true;
+            _workspaceEditorSession.SynchronizationFailed();
             return;
         }
         using namespace Windows::Data::Json;
@@ -7230,22 +7173,27 @@ namespace winrt::TerminalApp::implementation
         const auto type = message.GetNamedString(L"type", L"");
         if (type == L"flushed")
         {
-            if (message.GetNamedString(L"requestId", L"") == _workspaceEditorFlushId)
-            {
-                _workspaceEditorFlushId.clear();
-            }
+            _workspaceEditorSession.Flushed(std::wstring_view{ message.GetNamedString(L"requestId", L"") });
             return;
         }
         if (type == L"unavailable")
         {
-            _workspaceEditorReady = false;
+            _workspaceEditorSession.Unavailable();
+            const auto transportLost = _workspaceEditorSession.TakeLostContent();
+            for (auto& document : _workspaceDocuments)
+            {
+                if (transportLost)
+                    document.synchronization.Failed();
+                document.synchronization.HostUnavailable();
+            }
+            WorkspaceDocumentStatus().Text(L"编辑器已停止。仅保留最后同步的内容；未同步的修改无法恢复。关闭时可选择放弃。");
             return;
         }
         if (type == L"sync-error")
         {
             if (const auto document = _FindWorkspaceDocument(message.GetNamedString(L"id", L"")))
             {
-                document->synchronizationFailed = true;
+                document->synchronization.Failed();
                 document->pinned = true;
                 _RefreshWorkspaceDocumentTabs();
                 WorkspaceDocumentStatus().Text(L"编辑器内容未能完整同步。请缩减内容后重试。");
@@ -7254,7 +7202,7 @@ namespace winrt::TerminalApp::implementation
         }
         if (type == L"ready")
         {
-            _workspaceEditorReady = true;
+            _workspaceEditorSession.Connected();
             ++_workspaceEditorGeneration;
             for (auto& document : _workspaceDocuments)
             {
@@ -7308,7 +7256,7 @@ namespace winrt::TerminalApp::implementation
         }
         if (text.size() > 3 * 1024 * 1024)
         {
-            document->synchronizationFailed = true;
+            document->synchronization.Failed();
             document->pinned = true;
             _RefreshWorkspaceDocumentTabs();
             JsonObject error;
@@ -7319,11 +7267,11 @@ namespace winrt::TerminalApp::implementation
             WorkspaceEditorMessage.raise(*this, error.Stringify());
             return;
         }
-        document->synchronizationFailed = false;
         if (!document->model.UpdateText(std::wstring_view{ text }, static_cast<uint64_t>(revision)))
         {
             return;
         }
+        document->synchronization.Synchronized();
         document->pinned = document->pinned || document->model.Dirty();
         if (type == L"save")
         {
@@ -7370,8 +7318,8 @@ namespace winrt::TerminalApp::implementation
         winrt::hstring requestId;
         const auto reset = wil::scope_exit([&]() noexcept {
             _displayingDocumentCloseDialog = false;
-            _workspaceEditorFlushId.clear();
-            if (!closeConfirmed && _workspaceEditorEnabled && _workspaceEditorReady)
+            _workspaceEditorSession.EndClose();
+            if (!closeConfirmed && _workspaceEditorEnabled && _workspaceEditorSession.Ready())
             {
                 using namespace Windows::Data::Json;
                 JsonObject message;
@@ -7381,35 +7329,31 @@ namespace winrt::TerminalApp::implementation
                 WorkspaceEditorMessage.raise(*this, message.Stringify());
             }
         });
-        if (_workspaceEditorEnabled && _workspaceEditorReady && !_workspaceDocuments.empty())
+        if (_workspaceEditorEnabled && _workspaceEditorSession.Ready() && !_workspaceDocuments.empty())
         {
             using namespace Windows::Data::Json;
-            _workspaceEditorFlushId = winrt::hstring{ std::to_wstring(++_nextWorkspaceEditorFlushId) };
-            requestId = _workspaceEditorFlushId;
-            _workspaceEditorSynchronizationFailed = false;
+            requestId = winrt::hstring{ _workspaceEditorSession.BeginFlush() };
             JsonObject message;
             message.Insert(L"version", JsonValue::CreateNumberValue(1));
             message.Insert(L"type", JsonValue::CreateStringValue(L"flush"));
-            message.Insert(L"requestId", JsonValue::CreateStringValue(_workspaceEditorFlushId));
+            message.Insert(L"requestId", JsonValue::CreateStringValue(requestId));
             WorkspaceEditorMessage.raise(*this, message.Stringify());
             const auto dispatcher = Dispatcher();
-            for (size_t attempt = 0; attempt < 100 && !_workspaceEditorFlushId.empty(); ++attempt)
+            for (size_t attempt = 0; attempt < 100 && _workspaceEditorSession.FlushPending(); ++attempt)
             {
                 co_await winrt::resume_after(20ms);
                 co_await wil::resume_foreground(dispatcher);
             }
-            if (!_workspaceEditorFlushId.empty())
+            if (_workspaceEditorSession.FlushPending())
             {
                 WorkspaceDocumentStatus().Text(L"等待编辑器同步超时，关闭已取消。");
                 co_return false;
             }
-            if (_workspaceEditorSynchronizationFailed || std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.synchronizationFailed; }))
-            {
-                WorkspaceDocumentStatus().Text(L"编辑器内容未能完整同步，关闭已取消。请缩减内容后重试。");
-                co_return false;
             }
-        }
-        if (std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [](const auto& document) { return document.synchronizationFailed; }))
+        const auto relevant = [&](const auto& document) {
+            return (workspaceId.empty() || document.workspaceId == workspaceId) && (documentId.empty() || document.id == documentId);
+        };
+        if (_workspaceEditorSession.Ready() && (_workspaceEditorSession.Failed() || std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& document) { return relevant(document) && document.synchronization.Incomplete(); })))
         {
             WorkspaceDocumentStatus().Text(L"编辑器内容未能完整同步，关闭已取消。请缩减内容后重试。");
             co_return false;
@@ -7428,10 +7372,11 @@ namespace winrt::TerminalApp::implementation
             co_await winrt::resume_after(20ms);
             co_await wil::resume_foreground(dispatcher);
         }
+        const auto lostContent = _workspaceEditorSession.Lost() || std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& document) { return relevant(document) && document.synchronization.Lost(); });
         const auto matches = [&](const auto& document) {
-            return document.model.Dirty() && (workspaceId.empty() || document.workspaceId == workspaceId) && (documentId.empty() || document.id == documentId);
+            return relevant(document) && (document.model.Dirty() || document.synchronization.NeedsAttention());
         };
-        if (!std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), matches))
+        if (!lostContent && !std::any_of(_workspaceDocuments.begin(), _workspaceDocuments.end(), matches))
         {
             closeConfirmed = true;
             co_return true;
@@ -7441,14 +7386,19 @@ namespace winrt::TerminalApp::implementation
         {
             if (matches(document))
             {
-                names += document.path.filename().native() + L"\n";
+                names += document.path.native() + L"\n";
             }
         }
         ContentDialog dialog;
         Automation::AutomationProperties::SetAutomationId(dialog, L"WorkspaceEditorUnsavedDialog");
-        dialog.Title(box_value(L"保存未保存的文件？"));
+        dialog.Title(box_value(lostContent ? L"放弃未同步的修改并关闭？" : L"保存未保存的文件？"));
+        if (lostContent)
+            names = L"编辑器已停止，部分修改未能同步且无法恢复。重新加载只能恢复最后同步的内容。放弃将关闭所选文件并丢弃其未保存的修改；取消可继续保留和查看现有缓冲区。\n\n" + names;
         dialog.Content(box_value(winrt::hstring{ names }));
-        dialog.PrimaryButtonText(L"保存");
+        if (!lostContent)
+        {
+            dialog.PrimaryButtonText(L"保存");
+        }
         dialog.SecondaryButtonText(L"放弃");
         dialog.CloseButtonText(L"取消");
         dialog.DefaultButton(ContentDialogButton::Close);
@@ -7530,7 +7480,7 @@ namespace winrt::TerminalApp::implementation
                     found = it;
                     break;
                 }
-                if (!it->pinned && !it->model.Dirty() && !it->synchronizationFailed)
+                if (!it->pinned && !it->model.Dirty() && !it->synchronization.NeedsAttention())
                 {
                     preview = it;
                 }
@@ -7651,7 +7601,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_ApplyWorkspaceDocumentTheme()
     try
     {
-        if (_workspaceEditorReady)
+        if (_workspaceEditorSession.Ready())
         {
             using namespace Windows::Data::Json;
             JsonObject message;

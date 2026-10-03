@@ -92,7 +92,7 @@ async function startProbe(workspaceMode = false) {
     },
   };
   const context = vm.createContext({
-    document, window: { chrome: { webview: bridge }, location: { search: workspaceMode ? '?workspace=1' : '' }, addEventListener() {} }, self: {}, URL, URLSearchParams,
+    document, window: { chrome: { webview: bridge }, location: { pathname: workspaceMode ? '/workspace.html' : '/index.html', search: '' }, addEventListener() {} }, self: {}, URL, URLSearchParams,
     Worker: class { constructor(url) { this.url = url; } }, ResizeObserver: class { observe() {} disconnect() {} },
     requestAnimationFrame() {}, cancelAnimationFrame() {},
   });

@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include "../src/cascadia/TerminalSettingsModel/WorkspaceLayout.h"
+#include <json/json.h>
 
 #include <deque>
 #include <iostream>
@@ -74,6 +75,28 @@ int main()
 {
     try
     {
+        const auto defaultLayout = Layout::Default();
+        Require(Layout::FromJson(defaultLayout.ToJson()).Serialize() == defaultLayout.Serialize(), "Json::Value roundtrip changed layout");
+        for (const auto invalid : {
+                 LR"({"direction":"row","ratio":0.5,"first":"files","second":"files"})",
+                 LR"({"direction":"row","ratio":true,"first":"files","second":"editor"})",
+                 LR"({"direction":"row","ratio":0.5,"ratio":0.2,"first":"files","second":{"direction":"row","ratio":0.5,"first":"terminal","second":"editor"}})",
+                 LR"({"direction":"row","ratio":0.5,"first":"files","second":{"direction":"row","ratio":0.5,"first":"terminal","second":"editor"},"extra":0})",
+                 LR"({"direction":"row","ratio":0.5,"first":"files"})",
+                 LR"({"direction":"row","ratio":1,"first":"files","second":"editor"})" })
+        {
+            bool rejected{};
+            try
+            {
+                Layout::Parse(invalid);
+            }
+            catch (const std::invalid_argument&)
+            {
+                rejected = true;
+            }
+            Require(rejected, "Malformed layout was accepted");
+        }
+        Require(Layout::Parse(LR"({"direction":"row","ratio":0.24,"first":"\u0066iles","second":{"direction":"row","ratio":5e-1,"first":"terminal","second":"editor"}})").Serialize() == defaultLayout.Serialize(), "jsoncpp escapes or exponents were rejected");
         std::set<std::wstring> seen;
         std::deque<Layout> pending{ Layout::Default() };
         size_t geometryChecks = 0;

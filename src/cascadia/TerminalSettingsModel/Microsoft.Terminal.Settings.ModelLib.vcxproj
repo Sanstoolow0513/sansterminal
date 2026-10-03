@@ -161,6 +161,9 @@
     </ClCompile>
     <ClCompile Include="DynamicProfileUtils.cpp" />
     <ClCompile Include="FileUtils.cpp" />
+    <ClInclude Include="WorkspaceLayout.h" />
+    <ClInclude Include="WorkspaceLayoutDefaults.h" />
+    <ClCompile Include="WorkspaceLayout.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="GlobalAppSettings.cpp">
       <DependentUpon>GlobalAppSettings.idl</DependentUpon>
     </ClCompile>

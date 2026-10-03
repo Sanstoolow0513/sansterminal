@@ -1,0 +1,592 @@
+// Copyright (c) Sansterminal contributors.
+// Licensed under the MIT license.
+
+#include "pch.h"
+#include "WorkspaceEditorHost.h"
+#include <fstream>
+#include <wrl.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Data.Json.h>
+
+using namespace winrt::Windows::UI::Xaml;
+using namespace winrt::Windows::UI::Xaml::Controls;
+using namespace winrt::Windows::Foundation;
+using Microsoft::WRL::Callback;
+
+namespace
+{
+    constexpr auto origin = L"editor-probe.sansterminal.invalid";
+}
+
+WorkspaceEditorHost::WorkspaceEditorHost(HWND parent, HWND island, winrt::TerminalApp::TerminalWindow logic, std::function<void()> focusXaml) :
+    WorkspaceEditorHost{ parent, island, std::move(logic), std::move(focusXaml), L"WorkspaceEditor", L"https://editor-probe.sansterminal.invalid/workspace.html" }
+{
+}
+
+WorkspaceEditorHost::WorkspaceEditorHost(HWND parent, HWND island, winrt::TerminalApp::TerminalWindow logic, std::function<void()> focusXaml, const wchar_t* profile, const wchar_t* pageUri) :
+    _pageUri{ pageUri }, _parent{ parent }, _island{ island }, _logic{ std::move(logic) }, _focusXaml{ std::move(focusXaml) }
+{
+    _assets = std::filesystem::path{ wil::GetModuleFileNameW<std::wstring>(nullptr) }.parent_path() / L"EditorHostProbe";
+    std::filesystem::path cache;
+    try
+    {
+        cache = std::wstring_view{ winrt::Windows::Storage::ApplicationData::Current().LocalCacheFolder().Path() };
+    }
+    catch (...)
+    {
+        wil::unique_cotaskmem_string path;
+        THROW_IF_FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path));
+        cache = path.get();
+    }
+    // Reuse a bounded profile per host kind across windows and launches. Each
+    // controller still owns its own in-memory Monaco models. WebView2 supports
+    // sharing a UDF when environment options match; do not delete a live UDF.
+    _userData = cache / L"Sansterminal" / profile;
+    std::filesystem::create_directories(_userData);
+    _log = _userData / L"probe.log";
+    _nativeWindow.reset(CreateWindowExW(0, L"STATIC", L"Sansterminal EditorHostProbe", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 0, 0, _parent, nullptr, wil::GetModuleInstanceHandle(), nullptr));
+    THROW_LAST_ERROR_IF_NULL(_nativeWindow.get());
+    _Report(L"created: native offline editor host");
+}
+
+WorkspaceEditorHost::~WorkspaceEditorHost()
+{
+    Close();
+}
+
+UIElement WorkspaceEditorHost::CreateContent()
+{
+    const auto weak = weak_from_this();
+    _CreateSurface();
+    _loaded = _layout.Loaded(winrt::auto_revoke, [weak](auto&&, auto&&) {
+        if (const auto self = weak.lock())
+        {
+            self->_popupTimer.Start();
+            self->_SyncBounds();
+        }
+    });
+    _layoutUpdated = _layout.LayoutUpdated(winrt::auto_revoke, [weak](auto&&, auto&&) {
+        if (const auto self = weak.lock())
+            self->_SyncBounds();
+    });
+    _dialogVisibility = _logic.DialogVisibilityChanged(winrt::auto_revoke, [weak](auto&&, bool visible) {
+        if (const auto self = weak.lock())
+        {
+            if (visible)
+            {
+                self->_restoreEditorFocus = self->HasFocus();
+                self->_Report(self->_restoreEditorFocus ? L"dialog-focus: editor" : L"dialog-focus: xaml");
+            }
+            self->_modal = visible;
+            self->_SyncBounds();
+            self->_Report(visible ? L"dialog-open: native surface suppressed" : L"dialog-closed");
+            if (!visible && std::exchange(self->_restoreEditorFocus, false))
+                self->_FocusEditor();
+        }
+    });
+    _overlayVisibility = _logic.XamlOverlayVisibilityChanged(winrt::auto_revoke, [weak](auto&&, bool visible) {
+        if (const auto self = weak.lock())
+        {
+            self->_overlay = visible;
+            self->_SyncBounds();
+        }
+    });
+    // Native child windows sit above XAML. Track popup roots as well as the
+    // explicit dialog and in-tree overlay events so they can cover the editor.
+    _popupTimer.Interval(std::chrono::milliseconds{ 50 });
+    _popupTimer.Tick([weak](auto&&, auto&&) {
+        if (const auto self = weak.lock())
+            self->_SyncBounds();
+    });
+    return _layout;
+}
+
+void WorkspaceEditorHost::_CreateSurface()
+{
+    const auto weak = weak_from_this();
+    _logic.SetWorkspaceEditorEnabled(true);
+    _layout = _logic.GetRoot().as<FrameworkElement>();
+    _surface = _logic.GetWorkspaceEditorSurface().as<Border>();
+    _status = TextBlock{};
+    _status.Text(L"正在加载离线编辑器…");
+    _status.TextWrapping(TextWrapping::Wrap);
+    _status.Margin(ThicknessHelper::FromUniformLength(12));
+    _surface.Child(_status);
+    _workspaceMessage = _logic.WorkspaceEditorMessage(winrt::auto_revoke, [weak](auto&&, const winrt::hstring& message) {
+        if (const auto self = weak.lock(); self && !self->_closed)
+        {
+            const auto json = winrt::Windows::Data::Json::JsonObject::Parse(message);
+            const auto type = json.GetNamedString(L"type", L"");
+            if (type == L"focus-editor" || type == L"focus")
+                self->_FocusEditor();
+            else if (self->_ready && self->_webview)
+            {
+                const auto result = self->_webview->PostWebMessageAsJson(message.c_str());
+                if (FAILED(result))
+                    self->_Fail(result);
+            }
+        }
+    });
+}
+
+void WorkspaceEditorHost::_Start()
+{
+    if (_started || _closed)
+        return;
+    _started = true;
+    const auto generation = ++_generation;
+    _startedAt = std::chrono::steady_clock::now();
+    _popupTimer.Start();
+    constexpr std::array requiredAssets{
+        L"index.html", L"workspace.html", L"editor.js", L"editor.css", L"editor.worker.js", L"json.worker.js", L"ts.worker.js", L"css.worker.js", L"html.worker.js"
+    };
+    if (std::any_of(requiredAssets.begin(), requiredAssets.end(), [&](const auto asset) { return !std::filesystem::exists(_assets / asset); }))
+    {
+        _Fail(HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND));
+        return;
+    }
+    const auto weak = weak_from_this();
+    const auto result = CreateCoreWebView2EnvironmentWithOptions(nullptr, _userData.c_str(), nullptr, Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([weak, generation](HRESULT hr, ICoreWebView2Environment* environment) -> HRESULT {
+                                                                                                          const auto self = weak.lock();
+                                                                                                          if (!self || self->_closed || self->_generation != generation)
+                                                                                                              return S_OK;
+                                                                                                          if (FAILED(hr) || !environment)
+                                                                                                          {
+                                                                                                              self->_Fail(FAILED(hr) ? hr : E_POINTER);
+                                                                                                              return S_OK;
+                                                                                                          }
+                                                                                                          self->_environment = environment;
+                                                                                                          const auto result = environment->CreateCoreWebView2Controller(self->_nativeWindow.get(),
+                                                                                                                                                                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([weak, generation](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                                                                                                                                                                            const auto owner = weak.lock();
+                                                                                                                                                                            if (!owner || owner->_closed || owner->_generation != generation)
+                                                                                                                                                                            {
+                                                                                                                                                                                if (controller)
+                                                                                                                                                                                    controller->Close();
+                                                                                                                                                                                return S_OK;
+                                                                                                                                                                            }
+                                                                                                                                                                            if (SUCCEEDED(result) && controller)
+                                                                                                                                                                                result = owner->_Configure(controller, generation);
+                                                                                                                                                                            else if (SUCCEEDED(result))
+                                                                                                                                                                                result = E_POINTER;
+                                                                                                                                                                            if (FAILED(result))
+                                                                                                                                                                                owner->_Fail(result);
+                                                                                                                                                                            return S_OK;
+                                                                                                                                                                        }).Get());
+                                                                                                          if (FAILED(result))
+                                                                                                              self->_Fail(result);
+                                                                                                          return S_OK;
+                                                                                                      }).Get());
+    if (FAILED(result))
+        _Fail(result);
+}
+
+HRESULT WorkspaceEditorHost::_Configure(ICoreWebView2Controller* controller, const uint64_t generation)
+try
+{
+    _controller = controller;
+    RETURN_IF_FAILED(controller->get_CoreWebView2(&_webview));
+    const auto mapped = _webview.query<ICoreWebView2_3>();
+    RETURN_IF_FAILED(mapped->SetVirtualHostNameToFolderMapping(origin, _assets.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS));
+    wil::com_ptr<ICoreWebView2Settings> settings;
+    RETURN_IF_FAILED(_webview->get_Settings(&settings));
+    RETURN_IF_FAILED(settings->put_AreHostObjectsAllowed(FALSE));
+    RETURN_IF_FAILED(settings->put_AreDefaultScriptDialogsEnabled(FALSE));
+    RETURN_IF_FAILED(settings->put_AreDevToolsEnabled(FALSE));
+    RETURN_IF_FAILED(settings.query<ICoreWebView2Settings3>()->put_AreBrowserAcceleratorKeysEnabled(FALSE));
+    RETURN_IF_FAILED(settings->put_IsStatusBarEnabled(FALSE));
+
+    ::EventRegistrationToken token{};
+    const auto allowedPage = _pageUri;
+    RETURN_IF_FAILED(_webview->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>([allowedPage](auto*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                                          wil::unique_cotaskmem_string uri;
+                                                          RETURN_IF_FAILED(args->get_Uri(&uri));
+                                                          return args->put_Cancel(std::wstring_view{ uri.get() } != allowedPage);
+                                                      }).Get(),
+                                                      &token));
+    RETURN_IF_FAILED(_webview->add_FrameNavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>([](auto*, auto* args) -> HRESULT { return args->put_Cancel(TRUE); }).Get(), &token));
+    RETURN_IF_FAILED(_webview->add_NewWindowRequested(Callback<ICoreWebView2NewWindowRequestedEventHandler>([](auto*, auto* args) -> HRESULT { return args->put_Handled(TRUE); }).Get(), &token));
+    RETURN_IF_FAILED(_webview->add_PermissionRequested(Callback<ICoreWebView2PermissionRequestedEventHandler>([](auto*, auto* args) -> HRESULT { return args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY); }).Get(), &token));
+    RETURN_IF_FAILED(_webview.query<ICoreWebView2_4>()->add_DownloadStarting(Callback<ICoreWebView2DownloadStartingEventHandler>([](auto*, auto* args) -> HRESULT { return args->put_Cancel(TRUE); }).Get(), &token));
+
+    const auto weak = weak_from_this();
+    RETURN_IF_FAILED(_webview->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>([weak, generation](auto*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                                           if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
+                                                           {
+                                                               BOOL succeeded = FALSE;
+                                                               RETURN_IF_FAILED(args->get_IsSuccess(&succeeded));
+                                                               if (!succeeded)
+                                                                   self->_Fail(E_FAIL);
+                                                           }
+                                                           return S_OK;
+                                                       }).Get(),
+                                                       &token));
+    RETURN_IF_FAILED(_webview->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>([weak, generation](auto*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                                          const auto self = weak.lock();
+                                                          if (!self || self->_closed || self->_generation != generation)
+                                                              return S_OK;
+                                                          wil::unique_cotaskmem_string source;
+                                                          RETURN_IF_FAILED(args->get_Source(&source));
+                                                          if (std::wstring_view{ source.get() } != self->_pageUri)
+                                                              return E_ACCESSDENIED;
+                                                          return self->_HandleWebMessage(args);
+                                                      }).Get(),
+                                                      &token));
+    RETURN_IF_FAILED(_webview->add_ProcessFailed(Callback<ICoreWebView2ProcessFailedEventHandler>([weak, generation](auto*, auto*) -> HRESULT {
+                                                     if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
+                                                         self->_Fail(E_UNEXPECTED);
+                                                     return S_OK;
+                                                 }).Get(),
+                                                 &token));
+    RETURN_IF_FAILED(controller->add_AcceleratorKeyPressed(Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>([weak, generation](auto*, ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT {
+                                                               try
+                                                               {
+                                                                   const auto self = weak.lock();
+                                                                   if (!self || self->_closed || self->_generation != generation || !self->_HandlesWorkspaceKeys())
+                                                                       return S_OK;
+                                                                   UINT key{};
+                                                                   COREWEBVIEW2_KEY_EVENT_KIND kind{};
+                                                                   RETURN_IF_FAILED(args->get_VirtualKey(&key));
+                                                                   RETURN_IF_FAILED(args->get_KeyEventKind(&kind));
+                                                                   if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+                                                                       return S_OK;
+                                                                   const auto ctrl = GetKeyState(VK_CONTROL) < 0;
+                                                                   const auto alt = GetKeyState(VK_MENU) < 0;
+                                                                   const auto shift = GetKeyState(VK_SHIFT) < 0;
+                                                                   const auto win = GetKeyState(VK_LWIN) < 0 || GetKeyState(VK_RWIN) < 0;
+                                                                   COREWEBVIEW2_PHYSICAL_KEY_STATUS physical{};
+                                                                   RETURN_IF_FAILED(args->get_PhysicalKeyStatus(&physical));
+                                                                   const auto save = key == 'S' && ctrl && !alt && !shift && !win;
+                                                                   const auto focusTerminal = key == VK_F6 && !ctrl && !alt && !shift && !win;
+                                                                   const winrt::Microsoft::Terminal::Control::KeyChord keys{ ctrl, alt, shift, win, static_cast<int32_t>(key), static_cast<int32_t>(physical.ScanCode) };
+                                                                   if (!save && !focusTerminal && !self->_logic.HasWorkspaceKeyBinding(keys))
+                                                                       return S_OK;
+                                                                   // Release the synchronous browser input event before
+                                                                   // saving or dispatching an action into XAML. Consuming
+                                                                   // the key also prevents a duplicate DOM command.
+                                                                   RETURN_IF_FAILED(args->put_Handled(TRUE));
+                                                                   if (physical.WasKeyDown || !self->_ready || !self->_webview)
+                                                                       return S_OK;
+                                                                   // Monaco has no text command target while the selected
+                                                                   // file is loading and the previous model is detached.
+                                                                   if (focusTerminal)
+                                                                   {
+                                                                       self->_FocusTerminal();
+                                                                       return S_OK;
+                                                                   }
+                                                                   if (!save)
+                                                                   {
+                                                                       self->_DispatchWorkspaceKeyBinding(keys, generation);
+                                                                       return S_OK;
+                                                                   }
+                                                                   self->_Report(L"save-request: native accelerator");
+                                                                   const auto result = self->_webview->PostWebMessageAsJson(L"{\"version\":1,\"type\":\"save-active\"}");
+                                                                   if (FAILED(result))
+                                                                       self->_Report(std::wstring{ L"save-request-error: " } + std::to_wstring(result));
+                                                                   return result;
+                                                               }
+                                                               CATCH_RETURN();
+                                                           }).Get(),
+                                                           &token));
+    RETURN_IF_FAILED(controller->add_GotFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak, generation](auto*, auto*) -> HRESULT {
+                                                  if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
+                                                  {
+                                                      self->_focused = true;
+                                                      self->_OnEditorFocused();
+                                                  }
+                                                  return S_OK;
+                                              }).Get(),
+                                              &token));
+    RETURN_IF_FAILED(controller->add_LostFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak, generation](auto*, auto*) -> HRESULT {
+                                                   if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
+                                                       self->_focused = false;
+                                                   return S_OK;
+                                               }).Get(),
+                                               &token));
+    RETURN_IF_FAILED(controller->add_MoveFocusRequested(Callback<ICoreWebView2MoveFocusRequestedEventHandler>([weak, generation](auto*, auto* args) -> HRESULT {
+                                                            if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
+                                                                self->_FocusTerminal();
+                                                            return args->put_Handled(TRUE);
+                                                        }).Get(),
+                                                        &token));
+    _Report(L"controller-created: 1");
+    UINT browserProcess = 0;
+    RETURN_IF_FAILED(_webview->get_BrowserProcessId(&browserProcess));
+    _Report(std::wstring{ L"browser-process: " } + std::to_wstring(browserProcess));
+    _bounds = {};
+    _visible = false;
+    _SyncBounds();
+    RETURN_IF_FAILED(_webview->Navigate(allowedPage));
+    return S_OK;
+}
+CATCH_RETURN();
+
+HRESULT WorkspaceEditorHost::_HandleWorkspaceMessage(ICoreWebView2WebMessageReceivedEventArgs* args)
+try
+{
+    using namespace winrt::Windows::Data::Json;
+    wil::unique_cotaskmem_string raw;
+    RETURN_IF_FAILED(args->get_WebMessageAsJson(&raw));
+    // Document content is capped separately by the native document service.
+    // Check size before parsing, including all JSON string escaping overhead.
+    if (std::wstring_view{ raw.get() }.size() > 16 * 1024 * 1024)
+        return E_INVALIDARG;
+    const auto message = JsonObject::Parse(raw.get());
+    if (message.GetNamedNumber(L"version", 0) != 1)
+        return E_INVALIDARG;
+    const auto type = message.GetNamedString(L"type", L"");
+    if (type == L"focus-terminal")
+        _FocusTerminal();
+    else if (type == L"focused")
+        _logic.WorkspaceEditorFocused();
+    else if (type == L"show-dialog")
+        _ShowDialog();
+    else if (type == L"report")
+    {
+        const auto diagnostic = message.GetNamedString(L"message", L"");
+        const std::wstring_view diagnosticView{ diagnostic };
+        if (diagnostic.size() > 1024 || !(diagnosticView.starts_with(L"smoke-") || diagnosticView.starts_with(L"page-error:")))
+            return E_INVALIDARG;
+        _Report(diagnostic);
+    }
+    else if (type == L"ready" || type == L"changed" || type == L"save" || type == L"flushed" || type == L"sync-error" || type == L"retry-load")
+    {
+        if (type == L"ready")
+        {
+            _ready = true;
+            _Report(L"ready: workspace document bridge");
+        }
+        _logic.HandleWorkspaceEditorMessage(raw.get());
+    }
+    else
+        return E_INVALIDARG;
+    return S_OK;
+}
+CATCH_RETURN();
+
+void WorkspaceEditorHost::_SyncBounds()
+try
+{
+    if (_closed || !_layout)
+        return;
+    if (_started && !_failed && !_ready && std::chrono::steady_clock::now() - _startedAt > std::chrono::seconds{ 20 })
+    {
+        _Fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+        return;
+    }
+    _UpdateSurfaceWidth();
+    const auto root = _layout.XamlRoot();
+    if (!root)
+        return;
+    const auto popup = Media::VisualTreeHelper::GetOpenPopupsForXamlRoot(root).Size() != 0;
+    bool ancestorsVisible = _surface.IsLoaded();
+    for (DependencyObject element = _surface; element && ancestorsVisible; element = Media::VisualTreeHelper::GetParent(element))
+    {
+        if (const auto visual = element.try_as<UIElement>())
+            ancestorsVisible = visual.Visibility() == Visibility::Visible;
+    }
+    if (!_started && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0)
+        _Start();
+    const auto visible = _controller && !_failed && _shown && !_modal && !_overlay && !popup && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0 && !IsIconic(_parent);
+    if (_visible != visible)
+    {
+        _visible = visible;
+        if (_controller)
+            LOG_IF_FAILED(_controller->put_IsVisible(visible));
+        ShowWindow(_nativeWindow.get(), visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+        if (!visible)
+            _focused = false;
+        _Report(visible ? L"surface-visible" : L"surface-hidden");
+    }
+    if (!visible)
+        return;
+    const auto position = _surface.TransformToVisual(root.Content()).TransformPoint({});
+    const auto scale = root.RasterizationScale();
+    POINT offset{};
+    MapWindowPoints(_island, _parent, &offset, 1);
+    const RECT bounds{
+        offset.x + static_cast<LONG>(std::lround(position.X * scale)),
+        offset.y + static_cast<LONG>(std::lround(position.Y * scale)),
+        static_cast<LONG>(std::lround(_surface.ActualWidth() * scale)),
+        static_cast<LONG>(std::lround(_surface.ActualHeight() * scale))
+    };
+    if (!EqualRect(&_bounds, &bounds))
+    {
+        _bounds = bounds;
+        SetWindowPos(_nativeWindow.get(), HWND_TOP, bounds.left, bounds.top, bounds.right, bounds.bottom, SWP_NOACTIVATE);
+        if (_controller)
+            LOG_IF_FAILED(_controller->put_Bounds(RECT{ 0, 0, bounds.right, bounds.bottom }));
+    }
+    if (_controller)
+        LOG_IF_FAILED(_controller->NotifyParentWindowPositionChanged());
+}
+CATCH_LOG();
+
+bool WorkspaceEditorHost::HasFocus() const noexcept
+{
+    if (_closed || !_visible)
+        return false;
+    GUITHREADINFO info{ sizeof(info) };
+    if (GetGUIThreadInfo(GetWindowThreadProcessId(_parent, nullptr), &info))
+        return info.hwndFocus == _nativeWindow.get() || IsChild(_nativeWindow.get(), info.hwndFocus);
+    return _focused;
+}
+
+winrt::fire_and_forget WorkspaceEditorHost::_FocusTerminal()
+{
+    const auto keepAlive = shared_from_this();
+    try
+    {
+        co_await wil::resume_foreground(_layout.Dispatcher());
+        if (_closed)
+            co_return;
+        _focusXaml();
+        _logic.FocusActiveTerminal();
+        _Report(L"focus-terminal");
+    }
+    CATCH_LOG();
+}
+
+winrt::fire_and_forget WorkspaceEditorHost::_FocusEditor()
+{
+    const auto keepAlive = shared_from_this();
+    try
+    {
+        co_await wil::resume_foreground(_layout.Dispatcher(), winrt::Windows::UI::Core::CoreDispatcherPriority::Low);
+        _SyncBounds();
+        if (_closed || !_visible || !_controller)
+            co_return;
+        LOG_IF_FAILED(_controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC));
+        LOG_IF_FAILED(_webview->PostWebMessageAsString(L"focus"));
+        _Report(L"focus-editor");
+    }
+    CATCH_LOG();
+}
+
+winrt::fire_and_forget WorkspaceEditorHost::_DispatchWorkspaceKeyBinding(winrt::Microsoft::Terminal::Control::KeyChord keys, const uint64_t generation)
+{
+    const auto keepAlive = shared_from_this();
+    try
+    {
+        co_await wil::resume_foreground(_layout.Dispatcher(), winrt::Windows::UI::Core::CoreDispatcherPriority::Low);
+        if (_closed || _generation != generation)
+            co_return;
+        if (_logic.HandleWorkspaceKeyBinding(keys))
+            _Report(L"workspace-shortcut: handled");
+    }
+    CATCH_LOG();
+}
+
+winrt::fire_and_forget WorkspaceEditorHost::_ShowDialog()
+{
+    const auto keepAlive = shared_from_this();
+    try
+    {
+        ContentDialog dialog;
+        dialog.Title(winrt::box_value(L"XAML / WebView2 layer test"));
+        dialog.Content(winrt::box_value(L"The native editor is hidden while this modal is open. Closing it must restore the same buffers and controller."));
+        dialog.CloseButtonText(L"Return to editor");
+        co_await _logic.ShowDialog(dialog);
+    }
+    CATCH_LOG();
+}
+
+void WorkspaceEditorHost::_Report(std::wstring_view message)
+{
+    std::ofstream stream{ _log, std::ios::app };
+    stream << winrt::to_string(winrt::hstring{ message }) << '\n';
+    OutputDebugStringW((std::wstring{ L"EditorHostProbe: " } + std::wstring{ message } + L"\n").c_str());
+}
+
+void WorkspaceEditorHost::_Fail(HRESULT result)
+{
+    ++_generation;
+    _ready = false;
+    _failed = true;
+    _NotifyUnavailable();
+    if (_controller)
+        _controller->put_IsVisible(FALSE);
+    ShowWindow(_nativeWindow.get(), SW_HIDE);
+    _Report(std::wstring{ L"host-error: " } + std::wstring{ winrt::hresult_error{ result }.message() });
+    _ShowFailure();
+}
+
+void WorkspaceEditorHost::_ShowFailure()
+{
+    _status = TextBlock{};
+    _status.TextWrapping(TextWrapping::Wrap);
+    _status.Margin(ThicknessHelper::FromUniformLength(12));
+    _status.Text(L"编辑器已停止。重新加载可恢复最后同步的内容；尚未同步的修改无法恢复，撤销历史会重置。详情见 LocalCache/Sansterminal/WorkspaceEditor/probe.log。");
+    StackPanel recovery;
+    recovery.Children().Append(_status);
+    Button retry;
+    retry.Content(winrt::box_value(L"重新加载编辑器"));
+    const auto weak = weak_from_this();
+    retry.Click([weak](auto&&, auto&&) {
+        if (const auto self = weak.lock())
+            self->_Reload();
+    });
+    recovery.Children().Append(retry);
+    _surface.Child(recovery);
+}
+
+void WorkspaceEditorHost::_Reload()
+{
+    if (_closed)
+        return;
+    ++_generation;
+    if (_controller)
+        LOG_IF_FAILED(_controller->Close());
+    _webview.reset();
+    _controller.reset();
+    _environment.reset();
+    _failed = false;
+    _started = false;
+    _visible = false;
+    _status = TextBlock{};
+    _status.TextWrapping(TextWrapping::Wrap);
+    _status.Margin(ThicknessHelper::FromUniformLength(12));
+    _status.Text(L"正在重新加载编辑器…");
+    _surface.Child(_status);
+    _Report(L"reload: replay native document buffers; undo history resets");
+    _Start();
+}
+
+void WorkspaceEditorHost::Close() noexcept
+{
+    if (std::exchange(_closed, true))
+        return;
+    ++_generation;
+    _loaded.revoke();
+    _layoutUpdated.revoke();
+    _dialogVisibility.revoke();
+    _overlayVisibility.revoke();
+    _workspaceMessage.revoke();
+    _popupTimer.Destroy();
+    if (_controller)
+        LOG_IF_FAILED(_controller->Close());
+    _webview.reset();
+    _controller.reset();
+    _environment.reset();
+    _nativeWindow.reset();
+    try
+    {
+        _Report(L"closed: controller released");
+    }
+    CATCH_LOG();
+}
+
+HRESULT WorkspaceEditorHost::_HandleWebMessage(ICoreWebView2WebMessageReceivedEventArgs* args)
+{
+    return _HandleWorkspaceMessage(args);
+}
+
+void WorkspaceEditorHost::_OnEditorFocused()
+{
+    _logic.WorkspaceEditorFocused();
+}
+
+void WorkspaceEditorHost::_NotifyUnavailable()
+{
+    _logic.HandleWorkspaceEditorMessage(L"{\"version\":1,\"type\":\"unavailable\"}");
+}

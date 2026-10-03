@@ -31,7 +31,7 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
-    static bool isWorkspaceLayoutAction(const ActionAndArgs& action)
+    bool TerminalPage::_IsWorkspaceGlobalAction(const ActionAndArgs& action)
     {
         if (!action)
         {
@@ -39,16 +39,48 @@ namespace winrt::TerminalApp::implementation
         }
         switch (action.Action())
         {
+        case ShortcutAction::NewTab:
+        case ShortcutAction::NewWindow:
+        case ShortcutAction::DuplicateTab:
+        case ShortcutAction::OpenNewTabDropdown:
+        case ShortcutAction::CloseTab:
+        case ShortcutAction::CloseOtherTabs:
+        case ShortcutAction::CloseTabsAfter:
+        case ShortcutAction::CloseWindow:
+        case ShortcutAction::NextTab:
+        case ShortcutAction::PrevTab:
+        case ShortcutAction::SwitchToTab:
+        case ShortcutAction::MoveTab:
+        case ShortcutAction::TabSearch:
+        case ShortcutAction::RestoreLastClosed:
         case ShortcutAction::ToggleWorkspaceFiles:
         case ShortcutAction::ToggleWorkspaceTerminal:
         case ShortcutAction::ToggleWorkspaceEditor:
         case ShortcutAction::ToggleWorkspaceTabs:
         case ShortcutAction::OpenWorkspaceLayout:
-            return true;
         case ShortcutAction::OpenSettings:
-            if (const auto args = action.Args().try_as<OpenSettingsArgs>())
+        case ShortcutAction::OpenAbout:
+        case ShortcutAction::ToggleCommandPalette:
+        case ShortcutAction::ToggleFocusMode:
+        case ShortcutAction::ToggleFullscreen:
+        case ShortcutAction::ToggleAlwaysOnTop:
+        case ShortcutAction::SetFocusMode:
+        case ShortcutAction::SetFullScreen:
+        case ShortcutAction::SetMaximized:
+        case ShortcutAction::IdentifyWindow:
+        case ShortcutAction::IdentifyWindows:
+        case ShortcutAction::RenameWindow:
+        case ShortcutAction::OpenWindowRenamer:
+        case ShortcutAction::OpenSystemMenu:
+        case ShortcutAction::OpenWorkspace:
+        case ShortcutAction::Workspaces:
+        case ShortcutAction::Quit:
+            return true;
+        case ShortcutAction::MultipleActions:
+            if (const auto args = action.Args().try_as<MultipleActionsArgs>())
             {
-                return args.Target() == SettingsTarget::Workspace;
+                const auto actions = args.Actions();
+                return actions && std::all_of(actions.begin(), actions.end(), _IsWorkspaceGlobalAction);
             }
             return false;
         default:
@@ -62,7 +94,7 @@ namespace winrt::TerminalApp::implementation
         {
             if (const auto command = actionMap.GetActionByKeyChord(keys))
             {
-                return isWorkspaceLayoutAction(command.ActionAndArgs());
+                return _IsWorkspaceGlobalAction(command.ActionAndArgs());
             }
         }
         return false;
@@ -72,7 +104,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto actionMap = _settings.ActionMap())
         {
-            if (const auto command = actionMap.GetActionByKeyChord(keys); command && isWorkspaceLayoutAction(command.ActionAndArgs()))
+            if (const auto command = actionMap.GetActionByKeyChord(keys); command && _IsWorkspaceGlobalAction(command.ActionAndArgs()))
             {
                 return _actionDispatch->DoAction(command.ActionAndArgs());
             }

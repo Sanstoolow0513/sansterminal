@@ -43,7 +43,7 @@ private:
     WindowEmperor* _windowManager = nullptr;
     std::unique_ptr<IslandWindow> _window;
 #ifdef SANSTERMINAL_EDITOR_HOST
-    std::shared_ptr<EditorHostProbe> _editorProbe;
+    std::shared_ptr<WorkspaceEditorHost> _editorHost;
 #endif
     winrt::TerminalApp::AppLogic _appLogic{ nullptr };
     winrt::TerminalApp::TerminalWindow _windowLogic{ nullptr };

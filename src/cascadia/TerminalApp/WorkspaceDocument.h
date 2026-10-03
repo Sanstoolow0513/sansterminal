@@ -72,25 +72,7 @@ namespace WorkspaceEditor
     class DocumentService
     {
     public:
-        static Document Load(const std::filesystem::path& path)
-        {
-            Document document;
-            document.path = path;
-            document.baseline = ReadSnapshot(path);
-            const auto decoded = Decode(document.baseline.bytes);
-            document.text = document.savedText = decoded.text;
-            document.utf16 = decoded.utf16;
-            document.bom = decoded.bom;
-            document.crlf = decoded.crlf;
-            const auto attributes = GetFileAttributesW(path.c_str());
-            document.readOnly = attributes == INVALID_FILE_ATTRIBUTES || (attributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0;
-            if (document.readOnly)
-            {
-                document.readOnlyReason = attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ? L"Symbolic links and reparse points are read-only." : L"The file is marked read-only or is unavailable.";
-            }
-            document.loaded = true;
-            return document;
-        }
+        static Document Load(const std::filesystem::path& path);
 
         static SaveRequest PrepareSave(const Document& document)
         {

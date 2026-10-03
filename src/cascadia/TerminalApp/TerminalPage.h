@@ -20,6 +20,7 @@
 
 #include "WindowsPackageManagerFactory.h"
 #include "WorkspaceDocument.h"
+#include "WorkspaceEditorSession.h"
 #include "../TerminalSettingsModel/WorkspaceLayout.h"
 
 #include <filesystem>
@@ -341,7 +342,7 @@ namespace winrt::TerminalApp::implementation
             uint32_t pendingSaves{ 0 };
             uint64_t nextSaveSequence{ 0 };
             uint64_t completedSaveSequence{ 0 };
-            bool synchronizationFailed{ false };
+            WorkspaceEditor::DocumentSynchronization synchronization;
         };
         std::vector<WorkspaceSession> _workspaces;
         std::vector<WorkspaceNavigationEntry> _workspaceNavigationEntries;
@@ -350,14 +351,11 @@ namespace winrt::TerminalApp::implementation
         std::vector<std::filesystem::path> _workspaceSearchResults;
         std::vector<WorkspaceDocument> _workspaceDocuments;
         bool _workspaceEditorEnabled{ false };
-        bool _workspaceEditorReady{ false };
+        WorkspaceEditor::EditorSession _workspaceEditorSession;
         uint64_t _workspaceEditorGeneration{ 0 };
         bool _displayingDocumentCloseDialog{ false };
         bool _tryingCloseWindow{ false };
         uint64_t _nextWorkspaceDocumentId{ 0 };
-        uint64_t _nextWorkspaceEditorFlushId{ 0 };
-        winrt::hstring _workspaceEditorFlushId;
-        bool _workspaceEditorSynchronizationFailed{ false };
         winrt::hstring _activeWorkspaceId;
         bool _changingWorkspace{ false };
         bool _updatingDocumentTabs{ false };
@@ -561,6 +559,7 @@ namespace winrt::TerminalApp::implementation
         void _AboutButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
 
         void _KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
+        static bool _IsWorkspaceGlobalAction(const Microsoft::Terminal::Settings::Model::ActionAndArgs& action);
         bool _DispatchKeyBinding(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::ActionAndArgs& action);
         static ::Microsoft::Terminal::Core::ControlKeyStates _GetPressedModifierKeys() noexcept;
         static void _ClearKeyboardState(const WORD vkey, const WORD scanCode) noexcept;

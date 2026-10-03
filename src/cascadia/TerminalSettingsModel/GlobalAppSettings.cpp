@@ -3,6 +3,7 @@
 
 #include "pch.h"
 #include "GlobalAppSettings.h"
+#include "WorkspaceLayout.h"
 #include <DefaultSettings.h>
 #include "../../types/inc/Utils.hpp"
 #include "JsonUtils.h"
@@ -174,10 +175,7 @@ void GlobalAppSettings::LayerJson(const Json::Value& json, const OriginTag origi
             {
                 throw std::invalid_argument("workspaceLayout must be a split-tree JSON object.");
             }
-            Json::StreamWriterBuilder builder;
-            builder["indentation"] = "";
-            const auto serialized = winrt::to_hstring(Json::writeString(builder, layoutJson));
-            _WorkspaceLayout = winrt::hstring{ ::Sansterminal::WorkspaceLayout::Layout::Parse(std::wstring_view{ serialized }).Serialize() };
+            _WorkspaceLayout = winrt::hstring{ ::Sansterminal::WorkspaceLayout::Layout::FromJson(layoutJson).Serialize() };
             _logSettingSet(WorkspaceLayoutKey);
         }
     }
@@ -379,13 +377,7 @@ Json::Value GlobalAppSettings::ToJson()
 
     if (_WorkspaceLayout)
     {
-        const auto canonical = ::Sansterminal::WorkspaceLayout::Layout::Parse(std::wstring_view{ *_WorkspaceLayout }).Serialize();
-        const auto serialized = winrt::to_string(winrt::hstring{ canonical });
-        const std::unique_ptr<Json::CharReader> reader{ Json::CharReaderBuilder{}.newCharReader() };
-        if (!reader->parse(serialized.data(), serialized.data() + serialized.size(), &json[WorkspaceLayoutKey.data()], nullptr))
-        {
-            throw std::invalid_argument("workspaceLayout could not be serialized.");
-        }
+        json[WorkspaceLayoutKey.data()] = ::Sansterminal::WorkspaceLayout::Layout::Parse(std::wstring_view{ *_WorkspaceLayout }).ToJson();
     }
 
     json[JsonKey(ActionsKey)] = _actionMap->ToJson();
