@@ -1191,6 +1191,19 @@ namespace winrt::TerminalApp::implementation
                         {
                             if (const auto workspace = ApplicationState::SharedInstance().TakeWorkspace(args.Name()))
                             {
+                                if (const auto workspaceActions = workspace.TabLayout(); workspaceActions && workspaceActions.Size() > 0)
+                                {
+                                    auto replay = wil::to_vector(workspaceActions);
+                                    if (std::none_of(replay.begin(), replay.end(), [](const auto& entry) {
+                                            return entry.Action() == ShortcutAction::OpenWorkspace;
+                                        }))
+                                    {
+                                        // Legacy layouts only rename the physical window.
+                                        // Retain the stub's name as the owner of their tabs.
+                                        replay.insert(replay.begin(), ActionAndArgs{ ShortcutAction::OpenWorkspace, OpenWorkspaceArgs{ args.Name() } });
+                                        workspace.TabLayout(winrt::single_threaded_vector<ActionAndArgs>(std::move(replay)));
+                                    }
+                                }
                                 layout = workspace;
                             }
                         }
@@ -1240,6 +1253,14 @@ namespace winrt::TerminalApp::implementation
             return _root->FocusTab(tab);
         }
         return false;
+    }
+
+    void TerminalWindow::FocusActiveTerminal()
+    {
+        if (_root)
+        {
+            _root->FocusActiveTerminal();
+        }
     }
 
     void TerminalWindow::WindowName(const winrt::hstring& name)

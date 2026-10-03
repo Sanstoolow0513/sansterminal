@@ -132,6 +132,8 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspacePanelResizeRequests);
         TEST_METHOD(WorkspaceLayoutTabOrder);
         TEST_METHOD(NamedWindowLayoutRestoration);
+        TEST_METHOD(LegacyNamedWindowWorkspaceOwnership);
+        TEST_METHOD(WorkspaceShortcutRouting);
         TEST_METHOD(WorkspaceLayoutRecentHistory);
         TEST_METHOD(WorkspaceLayoutReplayOwnership);
         TEST_METHOD(WorkspaceMoveTabNeighbors);
@@ -140,6 +142,8 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceCompactViewRestoration);
         TEST_METHOD(WorkspaceCompactPaneFocus);
         TEST_METHOD(WorkspacePreviewFocusOnClose);
+        TEST_METHOD(WorkspacePreviewBackgroundDocumentClose);
+        TEST_METHOD(WorkspaceActiveTerminalFocus);
         TEST_METHOD(WorkspacePreviewThemeChanges);
         TEST_METHOD(WorkspaceNavigationCloseButtonHover);
 
@@ -1528,6 +1532,142 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::LegacyNamedWindowWorkspaceOwnership()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        winrt::hstring name;
+        IVector<WindowLayout> savedLayouts{ nullptr };
+        const wil::unique_handle completed{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+        VERIFY_IS_NOT_NULL(completed.get());
+        winrt::event_token completionToken{};
+        winrt::event_token renameToken{};
+        const auto cleanup = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() {
+                page->_actionDispatch->RenameWindow(completionToken);
+                page->RenameWindowRequested(renameToken);
+                const auto state = ApplicationState::SharedInstance();
+                state.RemoveWorkspace(name);
+                state.ForgetRecentWorkspace(name);
+                state.PersistedWindowLayouts(savedLayouts);
+            });
+        });
+        TestOnUIThread([&]() {
+            const auto state = ApplicationState::SharedInstance();
+            savedLayouts = state.PersistedWindowLayouts();
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            name = winrt::to_hstring(unique);
+            renameToken = page->RenameWindowRequested([this](auto&&, const winrt::TerminalApp::RenameWindowRequestedArgs& args) {
+                _windowProperties->WindowName(args.ProposedName());
+            });
+            _windowProperties->WindowName(name);
+            VERIFY_SUCCEEDED(page->_OpenNewTab(NewTerminalArgs{ 1 }));
+            const auto layout = page->GetWindowLayout();
+            auto actions = wil::to_vector(layout.TabLayout());
+            std::erase_if(actions, [](const auto& action) { return action.Action() == ShortcutAction::OpenWorkspace; });
+            layout.TabLayout(winrt::single_threaded_vector<ActionAndArgs>(std::move(actions)));
+            state.SaveWorkspace(name, layout);
+            WindowLayout stub;
+            stub.TabLayout(winrt::single_threaded_vector<ActionAndArgs>({ ActionAndArgs{ ShortcutAction::OpenWorkspace, OpenWorkspaceArgs{ name } } }));
+            state.PersistedWindowLayouts(winrt::single_threaded_vector<WindowLayout>({ stub }));
+
+            const auto settings = page->_settings;
+            settings.GlobalSettings().FirstWindowPreference(FirstWindowPreference::PersistedLayout);
+            const auto loadResult = winrt::make<winrt::TerminalApp::implementation::SettingsLoadEventArgs>(false, S_OK, L"", nullptr, settings);
+            const auto window = winrt::make_self<winrt::TerminalApp::implementation::TerminalWindow>(loadResult, *_contentManager);
+            window->SetPersistedLayoutIdx(0);
+            const auto restored = window->LoadPersistedLayout();
+            VERIFY_IS_NOT_NULL(restored);
+            VERIFY_IS_NULL(state.TakeWorkspace(name));
+
+            // Replay into an unnamed, empty page, as automatic restore does.
+            _windowProperties->WindowName(L"");
+            const std::vector<winrt::TerminalApp::Tab> tabs{ page->_tabs.begin(), page->_tabs.end() };
+            for (const auto& tab : tabs)
+            {
+                tab.Close();
+            }
+            page->_workspaces.clear();
+            page->_activeWorkspaceId.clear();
+            completionToken = page->_actionDispatch->RenameWindow([event = completed.get()](auto&&, auto&&) { SetEvent(event); });
+            page->ProcessStartupActions(wil::to_vector(restored.TabLayout()), {}, {}, true);
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(completed.get(), 10000));
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
+            VERIFY_ARE_EQUAL(name, page->_activeWorkspaceId);
+            VERIFY_ARE_EQUAL(name, page->WindowProperties().WindowName());
+            for (const auto& tab : page->_tabs)
+            {
+                VERIFY_ARE_EQUAL(name, page->_WorkspaceForTab(tab));
+            }
+            const auto selected = page->_GetFocusedTab();
+            const auto connection = page->_GetActiveControl().Connection();
+            page->_ShowWorkspaceHub();
+            page->_OpenWorkspace(name);
+            VERIFY_ARE_EQUAL(2u, page->_tabs.Size());
+            VERIFY_IS_TRUE(selected == page->_GetFocusedTab());
+            VERIFY_IS_TRUE(connection == page->_GetActiveControl().Connection());
+        });
+    }
+
+    void TabTests::WorkspaceShortcutRouting()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        TestOnUIThread([&]() {
+            const auto control = page->_GetActiveControl();
+            page->_ShowWorkspaceHub();
+            VERIFY_IS_TRUE(control == page->_GetActiveControl());
+            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceHubNewButton().FocusState());
+
+            // Observe dispatch without reading or replacing the user's clipboard.
+            const auto originalDispatch = page->_actionDispatch;
+            const auto restoreDispatch = wil::scope_exit([&]() noexcept { page->_actionDispatch = originalDispatch; });
+            page->_actionDispatch = winrt::make_self<winrt::TerminalApp::implementation::ShortcutActionDispatch>();
+            uint32_t terminalActions = 0;
+            uint32_t globalActions = 0;
+            const auto terminalHandler = [&](auto&&, const ActionEventArgs& args) {
+                ++terminalActions;
+                args.Handled(true);
+            };
+            page->_actionDispatch->PasteText(terminalHandler);
+            page->_actionDispatch->SendInput(terminalHandler);
+            page->_actionDispatch->CopyText(terminalHandler);
+            page->_actionDispatch->MultipleActions(terminalHandler);
+            page->_actionDispatch->ToggleCommandPalette([&](auto&&, const ActionEventArgs& args) {
+                ++globalActions;
+                args.Handled(true);
+            });
+            const ActionAndArgs paste{ ShortcutAction::PasteText, nullptr };
+            const ActionAndArgs send{ ShortcutAction::SendInput, SendInputArgs{ L"hidden shell input" } };
+            MultipleActionsArgs multiple;
+            multiple.Actions(winrt::single_threaded_vector<ActionAndArgs>({ ActionAndArgs{ ShortcutAction::NewTab, nullptr }, send }));
+            for (const auto& surface : std::vector<winrt::IInspectable>{ page->WorkspaceHub(), page->WorkspaceFilesPanel(), page->WorkspaceDocumentPanel(), page->WorkspaceNavigation(), page->WorkspaceHeader(), page->TabRow() })
+            {
+                VERIFY_IS_FALSE(page->_DispatchKeyBinding(surface, paste));
+                VERIFY_IS_FALSE(page->_DispatchKeyBinding(surface, send));
+                VERIFY_IS_FALSE(page->_DispatchKeyBinding(surface, ActionAndArgs{ ShortcutAction::CopyText, nullptr }));
+                VERIFY_IS_FALSE(page->_DispatchKeyBinding(surface, ActionAndArgs{ ShortcutAction::MultipleActions, multiple }));
+                VERIFY_IS_TRUE(page->_DispatchKeyBinding(surface, ActionAndArgs{ ShortcutAction::ToggleCommandPalette, nullptr }));
+            }
+            VERIFY_ARE_EQUAL(0u, terminalActions);
+            VERIFY_ARE_EQUAL(6u, globalActions);
+            // The filter leaves the terminal's own input route available.
+            VERIFY_IS_TRUE(page->_DispatchKeyBinding(control, send));
+            VERIFY_ARE_EQUAL(1u, terminalActions);
+        });
+    }
+
     void TabTests::WorkspaceLayoutRecentHistory()
     {
         BEGIN_TEST_METHOD_PROPERTIES()
@@ -2086,6 +2226,168 @@ namespace TerminalAppLocalTests
             VERIFY_IS_NULL(page->_GetFocusedTab());
             verifyPreviewFocus();
         });
+    }
+
+    void TabTests::WorkspacePreviewBackgroundDocumentClose()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        std::filesystem::path first;
+        std::filesystem::path second;
+        ScrollViewer scroll{ nullptr };
+        const auto cleanup = wil::scope_exit([&]() noexcept {
+            std::error_code error;
+            std::filesystem::remove(first, error);
+            std::filesystem::remove(second, error);
+        });
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto folder = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() };
+            first = folder / (std::wstring{ winrt::to_hstring(unique) } + L"-A.txt");
+            second = folder / (std::wstring{ winrt::to_hstring(unique) } + L"-B.txt");
+            {
+                std::ofstream file{ first };
+                for (auto i = 0; i < 200; ++i)
+                {
+                    file << "active document line\n";
+                }
+            }
+            std::ofstream{ second } << "background document";
+            page->WorkspaceContentArea().Width(1000);
+            page->WorkspaceDocumentEditor().Height(200);
+            page->UpdateLayout();
+            page->_OpenWorkspaceDocument(first, true);
+            page->_OpenWorkspaceDocument(second, true);
+            page->WorkspaceDocumentTabs().SelectedItem(page->_workspaceDocuments.front().tab);
+            page->UpdateLayout();
+            page->WorkspaceDocumentEditor().Document().Selection().SetRange(10, 20);
+            std::vector<DependencyObject> pending{ page->WorkspaceDocumentEditor() };
+            while (!pending.empty() && !scroll)
+            {
+                const auto element = pending.back();
+                pending.pop_back();
+                scroll = element.try_as<ScrollViewer>();
+                for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(element); ++i)
+                {
+                    pending.push_back(Media::VisualTreeHelper::GetChild(element, i));
+                }
+            }
+            VERIFY_IS_NOT_NULL(scroll);
+        });
+        bool hasScroll = false;
+        for (auto attempt = 0; attempt < 100 && !hasScroll; ++attempt)
+        {
+            TestOnUIThread([&]() {
+                page->UpdateLayout();
+                hasScroll = scroll.ScrollableHeight() > 100;
+            });
+            if (!hasScroll)
+            {
+                Sleep(10);
+            }
+        }
+        VERIFY_IS_TRUE(hasScroll);
+        TestOnUIThread([&]() {
+            page->WorkspaceDocumentEditor().Document().Selection().SetRange(10, 20);
+            scroll.ChangeView(nullptr, 100.0, nullptr, true);
+        });
+        for (auto attempt = 0; attempt < 100; ++attempt)
+        {
+            bool scrolled = false;
+            TestOnUIThread([&]() { scrolled = scroll.VerticalOffset() > 0; });
+            if (scrolled)
+            {
+                break;
+            }
+            Sleep(10);
+        }
+        double offset = 0;
+        TestOnUIThread([&]() {
+            offset = scroll.VerticalOffset();
+            VERIFY_IS_TRUE(offset > 0);
+            VERIFY_ARE_EQUAL(10, page->WorkspaceDocumentEditor().Document().Selection().StartPosition());
+            VERIFY_ARE_EQUAL(20, page->WorkspaceDocumentEditor().Document().Selection().EndPosition());
+            std::ofstream{ first } << "changed on disk; background close must retain the active preview";
+            const auto background = page->_workspaceDocuments.back().tab;
+            Button close{ nullptr };
+            std::vector<DependencyObject> pending{ background };
+            while (!pending.empty() && !close)
+            {
+                const auto element = pending.back();
+                pending.pop_back();
+                if (const auto button = element.try_as<Button>(); button && button.Name() == L"CloseButton")
+                {
+                    close = button;
+                }
+                for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(element); ++i)
+                {
+                    pending.push_back(Media::VisualTreeHelper::GetChild(element, i));
+                }
+            }
+            VERIFY_IS_NOT_NULL(close);
+            Automation::Peers::ButtonAutomationPeer peer{ close };
+            peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+        });
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(1u, page->WorkspaceDocumentTabs().TabItems().Size());
+            VERIFY_IS_TRUE(first == page->_FindWorkspace(page->_activeWorkspaceId)->selectedDocument);
+            const auto document = page->WorkspaceDocumentEditor().Document();
+            VERIFY_ARE_EQUAL(10, document.Selection().StartPosition());
+            VERIFY_ARE_EQUAL(20, document.Selection().EndPosition());
+            VERIFY_ARE_EQUAL(offset, scroll.VerticalOffset());
+            winrt::hstring text;
+            document.GetText(TextGetOptions::None, text);
+            VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"active document line"));
+            // Closing the selected tab invalidates the preview. Reopening it
+            // must read the file again, even though its path is the same.
+            page->_workspaceDocuments.clear();
+            page->_FindWorkspace(page->_activeWorkspaceId)->selectedDocument.clear();
+            page->_RefreshWorkspaceDocumentTabs();
+            page->_OpenWorkspaceDocument(first, true);
+            document.GetText(TextGetOptions::None, text);
+            VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"changed on disk"));
+        });
+    }
+
+    void TabTests::WorkspaceActiveTerminalFocus()
+    {
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:sideTabs", L"{true, false}")
+        END_TEST_METHOD_PROPERTIES();
+        bool sideTabs;
+        VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
+        const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
+        uint32_t firstId = 0;
+        uint32_t secondId = 0;
+        TestOnUIThread([&]() {
+            firstId = page->_GetFocusedTabImpl()->GetActivePane()->Id().value();
+            page->_SplitPane(nullptr, SplitDirection::Right, 0.5f, page->_MakePane(nullptr, page->_GetFocusedTab(), nullptr));
+            secondId = page->_GetFocusedTabImpl()->GetActivePane()->Id().value();
+            VERIFY_ARE_NOT_EQUAL(firstId, secondId);
+            page->UpdateLayout();
+        });
+        for (const auto id : { firstId, secondId })
+        {
+            TestOnUIThread([&]() { VERIFY_IS_TRUE(page->_GetFocusedTabImpl()->FocusPane(id)); });
+            TestOnUIThread([&]() {
+                VERIFY_ARE_EQUAL(id, page->_GetFocusedTabImpl()->GetActivePane()->Id().value());
+                const auto control = page->_GetActiveControl();
+                const auto connection = control.Connection();
+                page->_ShowWorkspaceHub();
+                VERIFY_ARE_EQUAL(FocusState::Unfocused, control.FocusState());
+                page->FocusActiveTerminal();
+                VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+                VERIFY_ARE_EQUAL(id, page->_GetFocusedTabImpl()->GetActivePane()->Id().value());
+                VERIFY_IS_TRUE(control == page->_GetActiveControl());
+                VERIFY_IS_TRUE(connection == page->_GetActiveControl().Connection());
+                VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, control.FocusState());
+            });
+        }
     }
 
     void TabTests::WorkspacePreviewThemeChanges()

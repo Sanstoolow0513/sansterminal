@@ -1891,7 +1891,7 @@ namespace winrt::TerminalApp::implementation
     // - e: the KeyRoutedEventArgs containing info about the keystroke.
     // Return Value:
     // - <none>
-    void TerminalPage::_KeyDownHandler(const Windows::Foundation::IInspectable& /*sender*/, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e)
+    void TerminalPage::_KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e)
     {
         const auto keyStatus = e.KeyStatus();
         const auto vkey = gsl::narrow_cast<WORD>(e.OriginalKey());
@@ -1945,7 +1945,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        if (!_actionDispatch->DoAction(cmd.ActionAndArgs()))
+        if (!_DispatchKeyBinding(sender, cmd.ActionAndArgs()))
         {
             return;
         }
@@ -1966,6 +1966,73 @@ namespace winrt::TerminalApp::implementation
         // The following is used to manually "consume" such dead keys and clear them from the keyboard state.
         _ClearKeyboardState(vkey, scanCode);
         e.Handled(true);
+    }
+
+    static bool workspaceGlobalAction(const ActionAndArgs& action)
+    {
+        if (!action)
+        {
+            return false;
+        }
+        switch (action.Action())
+        {
+        case ShortcutAction::NewTab:
+        case ShortcutAction::NewWindow:
+        case ShortcutAction::DuplicateTab:
+        case ShortcutAction::OpenNewTabDropdown:
+        case ShortcutAction::CloseTab:
+        case ShortcutAction::CloseOtherTabs:
+        case ShortcutAction::CloseTabsAfter:
+        case ShortcutAction::CloseWindow:
+        case ShortcutAction::NextTab:
+        case ShortcutAction::PrevTab:
+        case ShortcutAction::SwitchToTab:
+        case ShortcutAction::MoveTab:
+        case ShortcutAction::TabSearch:
+        case ShortcutAction::RestoreLastClosed:
+        case ShortcutAction::OpenSettings:
+        case ShortcutAction::OpenAbout:
+        case ShortcutAction::ToggleCommandPalette:
+        case ShortcutAction::ToggleFocusMode:
+        case ShortcutAction::ToggleFullscreen:
+        case ShortcutAction::ToggleAlwaysOnTop:
+        case ShortcutAction::SetFocusMode:
+        case ShortcutAction::SetFullScreen:
+        case ShortcutAction::SetMaximized:
+        case ShortcutAction::IdentifyWindow:
+        case ShortcutAction::IdentifyWindows:
+        case ShortcutAction::RenameWindow:
+        case ShortcutAction::OpenWindowRenamer:
+        case ShortcutAction::OpenSystemMenu:
+        case ShortcutAction::OpenWorkspace:
+        case ShortcutAction::Workspaces:
+        case ShortcutAction::Quit:
+            return true;
+        case ShortcutAction::MultipleActions:
+            if (const auto args = action.Args().try_as<MultipleActionsArgs>())
+            {
+                const auto actions = args.Actions();
+                return actions && std::all_of(actions.begin(), actions.end(), workspaceGlobalAction);
+            }
+            return false;
+        default:
+            return false;
+        }
+    }
+
+    bool TerminalPage::_DispatchKeyBinding(const IInspectable& sender, const ActionAndArgs& action)
+    {
+        // Workspace chrome can retain a selected terminal while focus is on a
+        // button, file tree or preview. Only global actions belong there.
+        if (sender == WorkspaceHub() || sender == WorkspaceFilesPanel() || sender == WorkspaceDocumentPanel() ||
+            sender == WorkspaceNavigation() || sender == WorkspaceHeader() || sender == TabRow())
+        {
+            if (!workspaceGlobalAction(action))
+            {
+                return false;
+            }
+        }
+        return _actionDispatch->DoAction(action);
     }
 
     bool TerminalPage::OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down)
@@ -6948,7 +7015,6 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_RefreshWorkspaceDocumentTabs()
     {
-        ++_workspaceDocumentVersion;
         const auto workspace = _FindWorkspace(_activeWorkspaceId);
         _updatingDocumentTabs = true;
         WorkspaceDocumentTabs().TabItems().Clear();
@@ -6985,10 +7051,20 @@ namespace winrt::TerminalApp::implementation
         WorkspaceDocumentTabs().SelectedItem(selected);
         _updatingDocumentTabs = false;
         _UpdateWorkspaceDocumentLayout();
-        if (workspace && selected && workspace->documentVisible)
+        if (!workspace || !selected || !workspace->documentVisible)
+        {
+            ++_workspaceDocumentVersion;
+            _workspacePreviewWorkspaceId.clear();
+            _workspacePreviewPath.clear();
+        }
+        else if (_restoringWorkspaceView || _workspacePreviewWorkspaceId != _activeWorkspaceId ||
+                 _workspacePreviewPath != workspace->selectedDocument)
         {
             if (_restoringWorkspaceView && workspace->previewPath == workspace->selectedDocument && !workspace->previewRtf.empty())
             {
+                ++_workspaceDocumentVersion;
+                _workspacePreviewWorkspaceId = _activeWorkspaceId;
+                _workspacePreviewPath = workspace->selectedDocument;
                 const auto editor = WorkspaceDocumentEditor();
                 editor.IsReadOnly(false);
                 const auto readOnly = wil::scope_exit([&]() noexcept { editor.IsReadOnly(true); });
@@ -7014,6 +7090,8 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_LoadWorkspaceDocument(const std::filesystem::path& path)
     {
         ++_workspaceDocumentVersion;
+        _workspacePreviewWorkspaceId = _activeWorkspaceId;
+        _workspacePreviewPath = path;
         const auto editor = WorkspaceDocumentEditor();
         _workspaceDocumentLineCount = 0;
         WorkspaceDocumentLineStatus().Text(L"");
@@ -7256,7 +7334,12 @@ namespace winrt::TerminalApp::implementation
                 workspace->preferTerminalInCompactView = false;
             }
             _UpdateWorkspaceDocumentLayout();
-            _LoadWorkspaceDocument(document->path);
+            // Tab collection updates can notify selection again for the file
+            // already displayed. Preserve that preview's selection and scroll.
+            if (_workspacePreviewWorkspaceId != _activeWorkspaceId || _workspacePreviewPath != document->path)
+            {
+                _LoadWorkspaceDocument(document->path);
+            }
             WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
         }
     }

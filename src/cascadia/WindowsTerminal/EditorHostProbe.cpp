@@ -358,20 +358,8 @@ winrt::fire_and_forget EditorHostProbe::_FocusTerminal()
         if (_closed)
             co_return;
         _focusXaml();
-        std::vector<DependencyObject> pending{ _logic.GetRoot() };
-        while (!pending.empty())
-        {
-            const auto element = pending.back();
-            pending.pop_back();
-            if (const auto terminal = element.try_as<winrt::Microsoft::Terminal::Control::TermControl>())
-            {
-                terminal.Focus(FocusState::Programmatic);
-                _Report(L"focus-terminal");
-                co_return;
-            }
-            for (int i = 0; i < Media::VisualTreeHelper::GetChildrenCount(element); ++i)
-                pending.push_back(Media::VisualTreeHelper::GetChild(element, i));
-        }
+        _logic.FocusActiveTerminal();
+        _Report(L"focus-terminal");
     }
     CATCH_LOG();
 }

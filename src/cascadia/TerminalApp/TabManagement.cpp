@@ -1530,6 +1530,16 @@ namespace winrt::TerminalApp::implementation
         return false;
     }
 
+    void TerminalPage::FocusActiveTerminal()
+    {
+        if (const auto tab = _GetFocusedTab(); tab && _GetActiveControl())
+        {
+            // Explicit tab activation reveals the terminal in compact view,
+            // then Tab::Focus restores the tab's active pane.
+            FocusTab(tab);
+        }
+    }
+
     // Method Description:
     // - Sends a desktop toast notification with the given title and body.
     //   When the toast is activated (clicked), the window is summoned and

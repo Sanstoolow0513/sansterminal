@@ -221,6 +221,7 @@ namespace winrt::TerminalApp::implementation
         void OpenSettingsUI();
         void WindowActivated(const bool activated);
         bool FocusTab(const winrt::TerminalApp::Tab& tab);
+        void FocusActiveTerminal();
 
         bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
@@ -343,6 +344,8 @@ namespace winrt::TerminalApp::implementation
         bool _restoringWorkspaceView{ false };
         uint64_t _workspaceSearchVersion{ 0 };
         uint64_t _workspaceDocumentVersion{ 0 };
+        winrt::hstring _workspacePreviewWorkspaceId;
+        std::filesystem::path _workspacePreviewPath;
         size_t _workspaceDocumentLineCount{ 0 };
         bool _hasStartupActions{ false };
         bool _startupActionsRestoreLayout{ false };
@@ -518,6 +521,7 @@ namespace winrt::TerminalApp::implementation
         void _AboutButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
 
         void _KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
+        bool _DispatchKeyBinding(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::ActionAndArgs& action);
         static ::Microsoft::Terminal::Core::ControlKeyStates _GetPressedModifierKeys() noexcept;
         static void _ClearKeyboardState(const WORD vkey, const WORD scanCode) noexcept;
         void _HookupKeyBindings(const Microsoft::Terminal::Settings::Model::IActionMapView& actionMap) noexcept;
