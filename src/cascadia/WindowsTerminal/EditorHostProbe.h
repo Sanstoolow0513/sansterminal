@@ -42,6 +42,7 @@ private:
     winrt::Windows::UI::Xaml::FrameworkElement::Loaded_revoker _loaded;
     winrt::Windows::UI::Xaml::FrameworkElement::LayoutUpdated_revoker _layoutUpdated;
     winrt::TerminalApp::TerminalWindow::DialogVisibilityChanged_revoker _dialogVisibility;
+    winrt::TerminalApp::TerminalWindow::XamlOverlayVisibilityChanged_revoker _overlayVisibility;
     winrt::TerminalApp::TerminalWindow::WorkspaceEditorMessage_revoker _workspaceMessage;
     SafeDispatcherTimer _popupTimer;
     wil::com_ptr<ICoreWebView2Environment> _environment;
@@ -56,6 +57,7 @@ private:
     bool _shown{ true };
     bool _visible{ false };
     bool _modal{ false };
+    bool _overlay{ false };
     bool _restoreEditorFocus{ false };
     bool _focused{ false };
     bool _ready{ false };

@@ -245,6 +245,7 @@ namespace winrt::TerminalApp::implementation
         til::typed_event<IInspectable, IInspectable> TitleChanged;
         til::typed_event<IInspectable, IInspectable> CloseWindowRequested;
         til::typed_event<IInspectable, winrt::hstring> WorkspaceEditorMessage;
+        til::typed_event<IInspectable, bool> XamlOverlayVisibilityChanged;
         til::typed_event<IInspectable, winrt::Windows::UI::Xaml::UIElement> SetTitleBarContent;
         til::typed_event<IInspectable, IInspectable> FocusModeChanged;
         til::typed_event<IInspectable, IInspectable> FullscreenChanged;

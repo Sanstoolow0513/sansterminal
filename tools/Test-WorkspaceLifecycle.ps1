@@ -126,6 +126,15 @@ try {
     Start-Sleep -Milliseconds 500
     Assert-Check ([IO.File]::ReadAllText((Join-Path $project 'alpha.txt')) -eq 'save-three') 'An older waiting snapshot cannot overwrite the newest save'
 
+    Focus-Editor
+    Send-Chord @(0x11, 0x10, 0x50) -Editor
+    Wait-Check { -not [WorkspaceEditorNative]::IsWindowVisible($script:surfaceHandle) } 'Command palette suppresses the native editor'
+    Wait-Check { $elementType::FocusedElement.Current.ProcessId -eq $ProbeProcessId } 'Command palette receives XAML keyboard focus'
+    Send-Chord @(0x1B)
+    Wait-Check { [WorkspaceEditorNative]::IsWindowVisible($script:surfaceHandle) } 'Dismissing the palette restores the native editor'
+
+    Replace-EditorText 'quit-confirmation-unsaved'
+    $firstWindow = $script:testHandle
     # The fixture profile supplies these bindings; both windows must belong to
     # this exact process so no installed/user terminal is touched.
     Send-Chord @(0x75)
@@ -141,7 +150,30 @@ try {
     Send-Chord @(0x0D)
     Start-Sleep -Milliseconds 250
     $executable = (Get-Process -Id $ProbeProcessId).Path
+    $secondWindow = $script:testHandle
+    foreach ($showCommand in @(6, 0)) { # SW_MINIMIZE, SW_HIDE
+        [void][WorkspaceEditorNative]::ShowWindow($firstWindow, $showCommand)
+        [void][WorkspaceEditorNative]::ActivateWindow($secondWindow)
+        Send-Chord @(0x11, 0x12, 0x51)
+        # Do not activate the first window here: Quit must reveal it itself.
+        Wait-Check { [WorkspaceEditorNative]::GetForegroundWindow() -eq $firstWindow -and [WorkspaceEditorNative]::IsWindowVisible($firstWindow) } "Quit reveals the earlier window (ShowWindow=$showCommand)"
+        $script:testHandle = $firstWindow
+        Connect-XamlRoot
+        Wait-Check { $null -ne (Get-UnsavedDialog) } 'Revealed window exposes its unsaved-document confirmation'
+        Invoke-UnsavedChoice '取消'
+        Wait-Check { $null -eq (Get-UnsavedDialog) } 'Cancel dismisses the confirmation'
+        Assert-Check (@(Get-TestWindows).Count -eq 2) 'Cancel preserves both windows and allows another Quit'
+        $script:testHandle = $secondWindow
+        Connect-XamlRoot
+    }
+    [void][WorkspaceEditorNative]::ShowWindow($firstWindow, 6)
+    [void][WorkspaceEditorNative]::ActivateWindow($secondWindow)
     Send-Chord @(0x11, 0x12, 0x51)
+    Wait-Check { [WorkspaceEditorNative]::GetForegroundWindow() -eq $firstWindow } 'Retrying Quit activates the confirmation owner'
+    $script:testHandle = $firstWindow
+    Connect-XamlRoot
+    Wait-Check { $null -ne (Get-UnsavedDialog) } 'Retried Quit still confirms unsaved changes'
+    Invoke-UnsavedChoice '放弃'
     Wait-Check { -not (Get-Process -Id $ProbeProcessId -ErrorAction SilentlyContinue) } 'Quit exits the dedicated process'
     $settingsDirectory = Split-Path -Parent $SettingsPath
     $state = Get-Content -Raw (Join-Path $settingsDirectory 'state.json') | ConvertFrom-Json

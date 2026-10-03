@@ -130,6 +130,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceTabActivation);
         TEST_METHOD(WorkspaceSurfaceDimensions);
         TEST_METHOD(WorkspaceTabSwitcherModes);
+        TEST_METHOD(WorkspaceXamlOverlayVisibility);
         TEST_METHOD(WorkspaceSidebarTabColors);
         TEST_METHOD(WorkspaceResizeCallbacks);
         TEST_METHOD(WorkspacePanelResizeRequests);
@@ -1408,6 +1409,52 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_GetFocusedTab() == first);
             page->_SelectNextTab(false, nullptr);
             VERIFY_IS_TRUE(page->_GetFocusedTab() == third);
+        });
+    }
+
+    void TabTests::WorkspaceXamlOverlayVisibility()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            std::vector<bool> visibility;
+            const auto token = page->XamlOverlayVisibilityChanged([&](auto&&, bool visible) { visibility.push_back(visible); });
+            const auto revoke = wil::scope_exit([&]() noexcept { page->XamlOverlayVisibilityChanged(token); });
+            const auto palette = page->LoadCommandPalette();
+            const auto suggestions = page->LoadSuggestionsUI();
+            VERIFY_IS_TRUE(visibility.empty());
+
+            // Opening either in-tree overlay must suppress the HWND immediately,
+            // without waiting for a layout pass or the popup polling timer.
+            palette.EnableCommandPaletteMode(CommandPaletteLaunchMode::Action);
+            palette.Visibility(Visibility::Visible);
+            VERIFY_ARE_EQUAL(1u, visibility.size());
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
+
+            suggestions.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_TRUE(visibility.back());
+            suggestions.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
+
+            // Tab search and the keyboard tab switcher share the same control.
+            palette.EnableTabSearchMode();
+            palette.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
+            // No physical modifier is held in a unit test. Leave the switcher
+            // empty so its anchor-key handler cannot immediately commit a tab.
+            palette.SetTabs(winrt::single_threaded_observable_vector<Tab>(), winrt::single_threaded_observable_vector<Tab>());
+            palette.EnableTabSwitcherMode(0, TabSwitcherMode::InOrder);
+            palette.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
         });
     }
 

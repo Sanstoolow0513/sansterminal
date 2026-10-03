@@ -175,8 +175,15 @@ UIElement EditorHostProbe::CreateContent()
                 self->_FocusEditor();
         }
     });
+    _overlayVisibility = _logic.XamlOverlayVisibilityChanged(winrt::auto_revoke, [weak](auto&&, bool visible) {
+        if (const auto self = weak.lock())
+        {
+            self->_overlay = visible;
+            self->_SyncBounds();
+        }
+    });
     // Native child windows sit above XAML. Track popup roots as well as the
-    // explicit dialog event so menus and dialogs can cover the editor safely.
+    // explicit dialog and in-tree overlay events so they can cover the editor.
     _popupTimer.Interval(std::chrono::milliseconds{ 50 });
     _popupTimer.Tick([weak](auto&&, auto&&) {
         if (const auto self = weak.lock())
@@ -469,7 +476,7 @@ try
     }
     if (_workspace && !_started && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0)
         _Start();
-    const auto visible = _controller && !_failed && _shown && !_modal && !popup && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0 && !IsIconic(_parent);
+    const auto visible = _controller && !_failed && _shown && !_modal && !_overlay && !popup && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0 && !IsIconic(_parent);
     if (_visible != visible)
     {
         _visible = visible;
@@ -643,6 +650,7 @@ void EditorHostProbe::Close() noexcept
     _loaded.revoke();
     _layoutUpdated.revoke();
     _dialogVisibility.revoke();
+    _overlayVisibility.revoke();
     _workspaceMessage.revoke();
     _popupTimer.Destroy();
     if (_controller)

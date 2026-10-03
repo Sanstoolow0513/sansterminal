@@ -1105,6 +1105,19 @@ safe_void_coroutine WindowEmperor::RequestQuitAll()
         }
         const auto logic = host->Logic();
         const auto dispatcher = logic.GetRoot().Dispatcher();
+        winrt::TerminalApp::SummonWindowBehavior summon;
+        summon.MoveToCurrentDesktop(true);
+        summon.ToggleVisibility(false);
+        summon.DropdownDuration(0);
+        summon.ToMonitor(winrt::TerminalApp::MonitorBehavior::InPlace);
+        co_await host->SummonWindowAsync(summon);
+        // Summoning yields while moving between desktops. The window may
+        // have closed independently before we returned to the UI thread.
+        if (std::find(_windows.begin(), _windows.end(), host) == _windows.end() ||
+            std::find(_deferredQuitCloses.begin(), _deferredQuitCloses.end(), host.get()) != _deferredQuitCloses.end())
+        {
+            continue;
+        }
         if (!co_await logic.TryCloseWindow())
         {
             co_return;

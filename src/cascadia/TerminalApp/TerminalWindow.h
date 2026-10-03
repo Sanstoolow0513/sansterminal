@@ -227,6 +227,7 @@ namespace winrt::TerminalApp::implementation
         FORWARDED_TYPED_EVENT(CloseWindowRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, CloseWindowRequested);
         FORWARDED_TYPED_EVENT(WorkspaceEditorMessage, winrt::Windows::Foundation::IInspectable, winrt::hstring, _root, WorkspaceEditorMessage);
         til::typed_event<winrt::Windows::Foundation::IInspectable, bool> DialogVisibilityChanged;
+        FORWARDED_TYPED_EVENT(XamlOverlayVisibilityChanged, winrt::Windows::Foundation::IInspectable, bool, _root, XamlOverlayVisibilityChanged);
         FORWARDED_TYPED_EVENT(FocusModeChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FocusModeChanged);
         FORWARDED_TYPED_EVENT(FullscreenChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FullscreenChanged);
         FORWARDED_TYPED_EVENT(ChangeMaximizeRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, ChangeMaximizeRequested);

@@ -2414,6 +2414,9 @@ namespace winrt::TerminalApp::implementation
         // When the visibility of the command palette changes to "collapsed",
         // the palette has been closed. Toss focus back to the currently active control.
         p.RegisterPropertyChangedCallback(UIElement::VisibilityProperty(), [this](auto&&, auto&&) {
+            // These overlays are siblings of the native editor surface, not
+            // popups. Suppress it synchronously whenever either is visible.
+            XamlOverlayVisibilityChanged.raise(*this, _commandPaletteIs(Visibility::Visible) || _suggestionsControlIs(Visibility::Visible));
             if (_commandPaletteIs(Visibility::Collapsed))
             {
                 _FocusActiveControl(nullptr, nullptr);
@@ -2447,6 +2450,7 @@ namespace winrt::TerminalApp::implementation
         const auto p = FindName(L"SuggestionsElement").as<SuggestionsControl>();
 
         p.RegisterPropertyChangedCallback(UIElement::VisibilityProperty(), [this](auto&&, auto&&) {
+            XamlOverlayVisibilityChanged.raise(*this, _commandPaletteIs(Visibility::Visible) || _suggestionsControlIs(Visibility::Visible));
             if (SuggestionsElement().Visibility() == Visibility::Collapsed)
             {
                 _FocusActiveControl(nullptr, nullptr);
