@@ -97,6 +97,7 @@ private:
     bool _skipPersistence = false;
     bool _needsPersistenceCleanup = false;
     bool _requestingQuitAll = false;
+    std::vector<AppHost*> _deferredQuitCloses;
     SafeDispatcherTimer _persistStateTimer;
     SafeDispatcherTimer _handoffTimeoutTimer;
     std::optional<bool> _currentSystemThemeIsDark;

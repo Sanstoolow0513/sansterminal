@@ -24,6 +24,7 @@ export function validateHostMessage(message) {
     case 'error':
       return typeof message.id === 'string' && message.id.length <= 4096 && isText(message.message);
     case 'focus':
+    case 'deactivate':
     case 'save-active':
     case 'resume':
       return true;
@@ -150,6 +151,12 @@ export function createWorkspace({ monaco, editor, postMessage, onState = () => {
       switch (message.type) {
         case 'open': open(message); break;
         case 'activate': activate(message.id); break;
+        case 'deactivate':
+          rememberView();
+          activeId = null;
+          editor.setModel(null);
+          notify();
+          break;
         case 'close': close(message.id); break;
         case 'saved': saved(message.id, message.revision); break;
         case 'error': {

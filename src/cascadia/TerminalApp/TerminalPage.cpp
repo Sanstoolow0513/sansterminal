@@ -4827,11 +4827,11 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void TerminalPage::OpenSettingsUI(const SettingsTarget target)
     {
-        _settingsReturnToHome = _workspaceHomeRoute;
         const auto temporaryWorkspace = _activeWorkspaceId.empty() && !_FindWorkspace(L"__untitled_workspace__");
         // If we're holding the settings tab's switch command, don't create a new one, switch to the existing one.
         if (!_settingsTab)
         {
+            _settingsReturnToHome = _workspaceHomeRoute;
             // Create the tab
             auto resultPane = std::make_shared<Pane>(_makeSettingsContent());
             _settingsTab = _CreateNewTabFromPane(resultPane);
@@ -7086,7 +7086,10 @@ namespace winrt::TerminalApp::implementation
         {
             WorkspaceDocumentStatus().Text(document->model.readOnlyReason.empty() ? winrt::hstring{ path.native() } : winrt::hstring{ document->model.readOnlyReason });
             _SendWorkspaceEditorMessage(L"activate", id);
-            _SendWorkspaceEditorMessage(L"focus");
+            if (!workspace->preferTerminalFocus)
+            {
+                _FocusWorkspaceDocument();
+            }
         }
     }
 
@@ -7101,14 +7104,18 @@ namespace winrt::TerminalApp::implementation
         }
         auto snapshot = document->model;
         const auto editorGeneration = _workspaceEditorGeneration;
+        const auto saveSequence = ++document->nextSaveSequence;
         ++document->pendingSaves;
         const auto finish = wil::scope_exit([&]() noexcept {
             if (const auto current = _FindWorkspaceDocument(id))
             {
                 --current->pendingSaves;
+                current->completedSaveSequence = saveSequence;
             }
         });
-        while (document->saving)
+        // A later waiter may wake first. Only the next submitted snapshot may
+        // advance the disk baseline, regardless of dispatcher scheduling.
+        while (saveSequence != document->completedSaveSequence + 1)
         {
             co_await winrt::resume_after(20ms);
             co_await wil::resume_foreground(dispatcher);
@@ -7259,6 +7266,10 @@ namespace winrt::TerminalApp::implementation
                     if (document.model.loaded && document.workspaceId == _activeWorkspaceId && document.path == workspace->selectedDocument)
                     {
                         _SendWorkspaceEditorMessage(L"activate", document.id);
+                        if (!workspace->preferTerminalFocus)
+                        {
+                            _FocusWorkspaceDocument();
+                        }
                         break;
                     }
                 }
@@ -7332,7 +7343,15 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_FocusWorkspaceDocument()
     {
-        _SendWorkspaceEditorMessage(L"focus");
+        // Retain explicit focus requests even before the editor is ready.
+        // Async callers check this preference before replaying the request.
+        if (const auto workspace = _FindWorkspace(_activeWorkspaceId);
+            workspace && !_workspaceHomeRoute && !workspace->selectedDocument.empty() &&
+            WorkspaceDocumentPanel().Visibility() == Visibility::Visible)
+        {
+            workspace->preferTerminalFocus = false;
+            _SendWorkspaceEditorMessage(L"focus");
+        }
     }
 
     Windows::Foundation::IAsyncOperation<bool> TerminalPage::_ConfirmWorkspaceEditorClose(winrt::hstring workspaceId, winrt::hstring documentId)
@@ -7613,6 +7632,12 @@ namespace winrt::TerminalApp::implementation
             if (document->model.loaded)
             {
                 _SendWorkspaceEditorMessage(L"activate", document->id);
+            }
+            else
+            {
+                // Keep the previous model and its undo history, but detach it
+                // immediately so input cannot target the previous native tab.
+                _SendWorkspaceEditorMessage(L"deactivate");
             }
             WorkspaceDocumentStatus().Text(document->loading ? L"正在读取文件…" : document->model.readOnlyReason.empty() ? winrt::hstring{ path.native() } :
                                                                                                                            winrt::hstring{ document->model.readOnlyReason });

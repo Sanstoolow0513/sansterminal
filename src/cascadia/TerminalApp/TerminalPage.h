@@ -338,6 +338,8 @@ namespace winrt::TerminalApp::implementation
             bool loading{ false };
             bool saving{ false };
             uint32_t pendingSaves{ 0 };
+            uint64_t nextSaveSequence{ 0 };
+            uint64_t completedSaveSequence{ 0 };
             bool synchronizationFailed{ false };
         };
         std::vector<WorkspaceSession> _workspaces;

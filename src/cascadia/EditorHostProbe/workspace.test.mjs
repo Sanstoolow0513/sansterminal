@@ -82,6 +82,36 @@ function fixture() {
   return { app, editor, messages, states, errors, liveModels, receive, open, insert };
 }
 
+test('pending native selection detaches the previous buffer without losing its edits or view', () => {
+  const f = fixture();
+  const first = f.open('first');
+  f.insert('edited ');
+  const selection = new Range(1, 8, 1, 16);
+  f.editor.selection = selection;
+  const staleContext = f.app.commandContext();
+  assert.equal(f.receive('deactivate'), true);
+  assert.equal(f.editor.getModel(), null);
+  assert.equal(f.app.getActive(), null);
+  assert.equal(f.app.commandContext().readOnly, true);
+  assert.equal(staleContext.executeEdits('stale', []), false);
+  const saves = f.messages.filter(message => message.type === 'save').length;
+  f.receive('focus');
+  f.receive('save-active');
+  assert.equal(f.app.save(), false);
+  assert.equal(f.messages.filter(message => message.type === 'save').length, saves);
+  // An unrelated read completion can open a model without selecting it.
+  f.receive('open', { id: 'second', workspaceId: 'workspace', path: 'C:\\project\\second.ts', text: 'second', readOnly: false });
+  assert.equal(f.editor.getModel(), null);
+  f.receive('activate', { id: 'second' });
+  assert.equal(f.editor.getModel().getValue(), 'second');
+  f.receive('activate', { id: 'first' });
+  assert.equal(f.editor.getModel(), first);
+  assert.equal(f.editor.selection, selection);
+  assert.equal(first.getValue(), 'edited original\n');
+  first.undo();
+  assert.equal(first.getValue(), 'original\n');
+});
+
 test('switching models preserves each buffer, undo history and selection; repeated open cannot overwrite edits', () => {
   const f = fixture();
   const first = f.open('first');

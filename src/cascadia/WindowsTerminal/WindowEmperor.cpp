@@ -1072,9 +1072,9 @@ void WindowEmperor::_createMessageWindow(const wchar_t* className)
     StringCchCopy(_notificationIcon.szTip, ARRAYSIZE(_notificationIcon.szTip), appNameLoc.c_str());
 }
 
-// Close one window at a time so each window can flush its editor and present
-// its own unsaved-changes dialog. Cancellation leaves that window and the
-// remaining windows running; it never bypasses another window's documents.
+// Confirm one window at a time, retaining its host until session persistence
+// has captured every layout and terminal buffer. Cancellation still closes
+// the confirmed windows and leaves the remaining windows running.
 safe_void_coroutine WindowEmperor::RequestQuitAll()
 {
     _assertIsMainThread();
@@ -1083,11 +1083,23 @@ safe_void_coroutine WindowEmperor::RequestQuitAll()
         co_return;
     }
     _requestingQuitAll = true;
-    const auto reset = wil::scope_exit([this]() noexcept { _requestingQuitAll = false; });
+    bool quitting = false;
+    const auto reset = wil::scope_exit([&]() noexcept {
+        _requestingQuitAll = false;
+        const auto closes = std::exchange(_deferredQuitCloses, {});
+        if (!quitting)
+        {
+            for (const auto host : closes)
+            {
+                SendMessageW(_window.get(), WM_CLOSE_TERMINAL_WINDOW, 0, reinterpret_cast<LPARAM>(host));
+            }
+        }
+    });
     const auto windows = _windows;
     for (const auto& host : windows)
     {
-        if (std::find(_windows.begin(), _windows.end(), host) == _windows.end())
+        if (std::find(_windows.begin(), _windows.end(), host) == _windows.end() ||
+            std::find(_deferredQuitCloses.begin(), _deferredQuitCloses.end(), host.get()) != _deferredQuitCloses.end())
         {
             continue;
         }
@@ -1097,14 +1109,15 @@ safe_void_coroutine WindowEmperor::RequestQuitAll()
         {
             co_return;
         }
-        // Let the queued WM_CLOSE_TERMINAL_WINDOW dispose this host before
-        // opening a dialog in the next XAML root.
+        // Record the queued close before checking whether all windows agreed.
         co_await wil::resume_foreground(dispatcher, winrt::Windows::UI::Core::CoreDispatcherPriority::Low);
     }
     // Explicit quit also exits a headless process, once all confirmed close
     // requests have been processed. A newly opened window keeps it alive.
-    if (_windowCount <= 0 && _messageBoxCount <= 0)
+    if (_deferredQuitCloses.size() == _windows.size() && _messageBoxCount <= 0)
     {
+        quitting = true;
+        // The message loop persists all retained hosts before process exit.
         PostQuitMessage(0);
     }
 }
@@ -1153,6 +1166,19 @@ LRESULT WindowEmperor::_messageHandler(HWND window, UINT const message, WPARAM c
         {
         case WM_CLOSE_TERMINAL_WINDOW:
         {
+            const auto closingHost = reinterpret_cast<AppHost*>(lParam);
+            if (std::none_of(_windows.begin(), _windows.end(), [&](const auto& host) { return host.get() == closingHost; }))
+            {
+                return 0;
+            }
+            if (_requestingQuitAll)
+            {
+                if (std::find(_deferredQuitCloses.begin(), _deferredQuitCloses.end(), closingHost) == _deferredQuitCloses.end())
+                {
+                    _deferredQuitCloses.push_back(closingHost);
+                }
+                return 0;
+            }
             const auto globalSettings = _app.Logic().Settings().GlobalSettings();
             // Keep the last window in the array so that we can persist it on exit.
             // We check for AllowHeadless(), as that being true prevents us from ever quitting in the first place.

@@ -333,8 +333,9 @@ try
                                                                    COREWEBVIEW2_PHYSICAL_KEY_STATUS physical{};
                                                                    RETURN_IF_FAILED(args->get_PhysicalKeyStatus(&physical));
                                                                    const auto save = key == 'S' && ctrl && !alt && !shift && !win;
+                                                                   const auto focusTerminal = key == VK_F6 && !ctrl && !alt && !shift && !win;
                                                                    const winrt::Microsoft::Terminal::Control::KeyChord keys{ ctrl, alt, shift, win, static_cast<int32_t>(key), static_cast<int32_t>(physical.ScanCode) };
-                                                                   if (!save && !self->_logic.HasWorkspaceKeyBinding(keys))
+                                                                   if (!save && !focusTerminal && !self->_logic.HasWorkspaceKeyBinding(keys))
                                                                        return S_OK;
                                                                    // Release the synchronous browser input event before
                                                                    // saving or dispatching an action into XAML. Consuming
@@ -342,6 +343,13 @@ try
                                                                    RETURN_IF_FAILED(args->put_Handled(TRUE));
                                                                    if (physical.WasKeyDown || !self->_ready || !self->_webview)
                                                                        return S_OK;
+                                                                   // Monaco has no text command target while the selected
+                                                                   // file is loading and the previous model is detached.
+                                                                   if (focusTerminal)
+                                                                   {
+                                                                       self->_FocusTerminal();
+                                                                       return S_OK;
+                                                                   }
                                                                    if (!save)
                                                                    {
                                                                        self->_DispatchWorkspaceKeyBinding(keys, generation);
