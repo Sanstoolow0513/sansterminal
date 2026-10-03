@@ -24,6 +24,7 @@ export function validateHostMessage(message) {
     case 'error':
       return typeof message.id === 'string' && message.id.length <= 4096 && isText(message.message);
     case 'focus':
+    case 'save-active':
     case 'resume':
       return true;
     case 'flush':
@@ -48,7 +49,9 @@ export function createWorkspace({ monaco, editor, postMessage, onState = () => {
     document.error = message;
     if (document.id === activeId) notify();
   };
-  const snapshot = (document, type) => ({ type, id: document.id, text: document.model.getValue(), dirty: dirty(document), revision: document.model.getAlternativeVersionId() });
+  // getVersionId increases on undo/redo too. Alternative versions identify
+  // saved undo positions but cannot order snapshots crossing the native bridge.
+  const snapshot = (document, type) => ({ type, id: document.id, text: document.model.getValue(), dirty: dirty(document), revision: document.model.getVersionId() });
   const checkSnapshot = (document, message) => {
     if (message.text.length <= maxTextLength && JSON.stringify({ version: protocolVersion, ...message }).length <= maxSerializedLength) return true;
     const error = '文件缓冲区过大，无法与终端同步或保存。请撤销或缩小文本后再关闭。';
@@ -128,15 +131,15 @@ export function createWorkspace({ monaco, editor, postMessage, onState = () => {
     if (!document) return;
     // The native unsaved-changes dialog can also save the buffer it already
     // received. Only the exact current revision may establish this baseline.
-    const sequence = document.pendingSaves.get(revision) ??
-      (revision === document.model.getAlternativeVersionId() ? ++saveSequence : undefined);
-    if (sequence === undefined) return;
+    const pending = document.pendingSaves.get(revision) ??
+      (revision === document.model.getVersionId() ? { sequence: ++saveSequence, alternativeRevision: document.model.getAlternativeVersionId() } : undefined);
+    if (pending === undefined) return;
     document.pendingSaves.delete(revision);
     // Saving is asynchronous: acknowledge the exact requested snapshot even
     // when the user has typed again. Undoing to that snapshot becomes clean.
-    if (sequence <= document.acknowledgedSequence) return;
-    document.acknowledgedSequence = sequence;
-    document.savedRevision = revision;
+    if (pending.sequence <= document.acknowledgedSequence) return;
+    document.acknowledgedSequence = pending.sequence;
+    document.savedRevision = pending.alternativeRevision;
     document.error = null;
     if (activeId === id) notify();
   }
@@ -156,6 +159,7 @@ export function createWorkspace({ monaco, editor, postMessage, onState = () => {
           break;
         }
         case 'focus': editor.focus(); break;
+        case 'save-active': save(); break;
         case 'flush':
           suspended = true;
           editor.updateOptions({ readOnly: true });
@@ -185,10 +189,10 @@ export function createWorkspace({ monaco, editor, postMessage, onState = () => {
   function save() {
     const document = getActive();
     if (!document || document.readOnly || suspended) return false;
-    const revision = document.model.getAlternativeVersionId();
+    const revision = document.model.getVersionId();
     const message = { type: 'save', id: document.id, text: document.model.getValue(), revision };
     if (!checkSnapshot(document, message)) return false;
-    document.pendingSaves.set(revision, ++saveSequence);
+    document.pendingSaves.set(revision, { sequence: ++saveSequence, alternativeRevision: document.model.getAlternativeVersionId() });
     send(message);
     return true;
   }

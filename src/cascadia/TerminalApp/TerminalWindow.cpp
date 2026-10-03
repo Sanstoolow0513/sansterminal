@@ -965,6 +965,16 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    Windows::Foundation::IAsyncOperation<bool> TerminalWindow::TryCloseWindow()
+    {
+        const auto lifetime = get_strong();
+        if (_root)
+        {
+            co_return co_await _root->TryCloseWindow();
+        }
+        co_return true;
+    }
+
     winrt::TerminalApp::TaskbarState TerminalWindow::TaskbarState()
     {
         if (_root)
@@ -1281,6 +1291,16 @@ namespace winrt::TerminalApp::implementation
     void TerminalWindow::WorkspaceEditorFocused()
     {
         _root->WorkspaceEditorFocused();
+    }
+
+    bool TerminalWindow::HasWorkspaceKeyBinding(const Microsoft::Terminal::Control::KeyChord& keys)
+    {
+        return _root && _root->HasWorkspaceKeyBinding(keys);
+    }
+
+    bool TerminalWindow::HandleWorkspaceKeyBinding(const Microsoft::Terminal::Control::KeyChord& keys)
+    {
+        return _root && _root->HandleWorkspaceKeyBinding(keys);
     }
 
     void TerminalWindow::WindowName(const winrt::hstring& name)

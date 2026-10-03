@@ -23,6 +23,7 @@ static constexpr std::string_view ActionsKey{ "actions" };
 static constexpr std::string_view ThemeKey{ "theme" };
 static constexpr std::string_view DefaultProfileKey{ "defaultProfile" };
 static constexpr std::string_view FirstWindowPreferenceKey{ "firstWindowPreference" };
+static constexpr std::string_view WorkspaceLayoutKey{ "workspaceLayout" };
 static constexpr std::string_view LegacyUseTabSwitcherModeKey{ "useTabSwitcher" };
 static constexpr std::string_view LegacyReloadEnvironmentVariablesKey{ "compatibility.reloadEnvironmentVariables" };
 static constexpr std::string_view LegacyForceVTInputKey{ "experimental.input.forceVT" };
@@ -60,6 +61,7 @@ winrt::com_ptr<GlobalAppSettings> GlobalAppSettings::Copy() const
     auto globals{ winrt::make_self<GlobalAppSettings>() };
 
     globals->_UnparsedDefaultProfile = _UnparsedDefaultProfile;
+    globals->_WorkspaceLayout = _WorkspaceLayout;
 
     globals->_defaultProfile = _defaultProfile;
     globals->_actionMap = _actionMap->Copy();
@@ -159,6 +161,26 @@ winrt::com_ptr<GlobalAppSettings> GlobalAppSettings::FromJson(const Json::Value&
 void GlobalAppSettings::LayerJson(const Json::Value& json, const OriginTag origin)
 {
     JsonUtils::GetValueForKey(json, DefaultProfileKey, _UnparsedDefaultProfile);
+    if (json.isMember(WorkspaceLayoutKey.data()))
+    {
+        const auto& layoutJson = json[WorkspaceLayoutKey.data()];
+        if (layoutJson.isNull())
+        {
+            _WorkspaceLayout.reset();
+        }
+        else
+        {
+            if (!layoutJson.isObject())
+            {
+                throw std::invalid_argument("workspaceLayout must be a split-tree JSON object.");
+            }
+            Json::StreamWriterBuilder builder;
+            builder["indentation"] = "";
+            const auto serialized = winrt::to_hstring(Json::writeString(builder, layoutJson));
+            _WorkspaceLayout = winrt::hstring{ ::Sansterminal::WorkspaceLayout::Layout::Parse(std::wstring_view{ serialized }).Serialize() };
+            _logSettingSet(WorkspaceLayoutKey);
+        }
+    }
 
     // GH#8076 - when adding enum values to this key, we also changed it from
     // "useTabSwitcher" to "tabSwitcherMode". Continue supporting
@@ -354,6 +376,17 @@ Json::Value GlobalAppSettings::ToJson()
     JsonUtils::SetValueForKey(json, jsonKey, _##name);
     MTSM_GLOBAL_SETTINGS(GLOBAL_SETTINGS_TO_JSON)
 #undef GLOBAL_SETTINGS_TO_JSON
+
+    if (_WorkspaceLayout)
+    {
+        const auto canonical = ::Sansterminal::WorkspaceLayout::Layout::Parse(std::wstring_view{ *_WorkspaceLayout }).Serialize();
+        const auto serialized = winrt::to_string(winrt::hstring{ canonical });
+        const std::unique_ptr<Json::CharReader> reader{ Json::CharReaderBuilder{}.newCharReader() };
+        if (!reader->parse(serialized.data(), serialized.data() + serialized.size(), &json[WorkspaceLayoutKey.data()], nullptr))
+        {
+            throw std::invalid_argument("workspaceLayout could not be serialized.");
+        }
+    }
 
     json[JsonKey(ActionsKey)] = _actionMap->ToJson();
     json[JsonKey(KeybindingsKey)] = _actionMap->KeyBindingsToJson();

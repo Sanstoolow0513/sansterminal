@@ -101,6 +101,8 @@ namespace winrt::TerminalApp::implementation
         Windows::UI::Xaml::UIElement GetWorkspaceEditorSurface();
         void HandleWorkspaceEditorMessage(const winrt::hstring& message);
         void WorkspaceEditorFocused();
+        bool HasWorkspaceKeyBinding(const Microsoft::Terminal::Control::KeyChord& keys);
+        bool HandleWorkspaceKeyBinding(const Microsoft::Terminal::Control::KeyChord& keys);
 
         std::optional<uint32_t> LoadPersistedLayoutIdx() const;
         winrt::Microsoft::Terminal::Settings::Model::WindowLayout LoadPersistedLayout();
@@ -127,6 +129,7 @@ namespace winrt::TerminalApp::implementation
         bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
         void CloseWindow();
+        Windows::Foundation::IAsyncOperation<bool> TryCloseWindow();
         void WindowVisibilityChanged(const bool showOrHide);
 
         winrt::TerminalApp::TaskbarState TaskbarState();

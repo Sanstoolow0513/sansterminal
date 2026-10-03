@@ -44,6 +44,7 @@ async function startProbe(workspaceMode = false) {
           getValue() { return this.value; },
           getValueInRange(range) { return this.value.slice(range.startColumn - 1, range.endColumn - 1); },
           getAlternativeVersionId() { return this.version; },
+          getVersionId() { return this.version; },
           setValue(text) { this.value = text; ++this.version; for (const listener of this.listeners) listener(); },
           setEOL(sequence) { this.setValue(this.value.replace(/\r?\n/g, sequence ? '\r\n' : '\n')); },
           onDidChangeContent(listener) { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; },
@@ -183,7 +184,7 @@ test('worker failures clean up the test models without changing the active docum
   assert.equal(harness.editors.filter((editor) => !editor.disposed).length, 1);
 });
 
-test('workspace starts without scratch buffers and runs smoke without opening a real document', async () => {
+test('production workspace starts without scratch buffers or automatic self-tests', async () => {
   const harness = await startProbe(true);
   assert.equal(harness.app.models.size, 0);
   assert.equal(harness.app.editor.getModel(), null);
@@ -191,16 +192,16 @@ test('workspace starts without scratch buffers and runs smoke without opening a 
   assert.equal(harness.document.getElementById('workspace-tools').hidden, false);
   assert.equal(harness.document.getElementById('save').disabled, true);
   assert.ok(harness.messages.some((message) => message.type === 'ready' && message.version === 1));
-  await harness.entered();
-  harness.release();
-  assert.match(await harness.finished(), /^smoke-ok:/);
   assert.equal(harness.liveModels.size, 0);
-  assert.equal(harness.app.editor.getModel(), null);
+  assert.equal(harness.editors.length, 1);
+  assert.equal(harness.validations.length, 0);
+  for (const id of ['check', 'dialog', 'uppercase', 'timestamp']) assert.equal(harness.document.getElementById(id).hidden, true);
   assert.ok(harness.messages.every((message) => typeof message === 'object' && message.version === 1));
 });
 
 test('opening a workspace file while smoke awaits workers preserves the document and does not report a leak', async () => {
   const harness = await startProbe(true);
+  harness.app.smoke();
   await harness.entered();
   harness.receive({ version: 1, type: 'open', id: 'file', workspaceId: 'workspace', path: 'C:\\project\\file.ts', text: 'const x = 1;\n', readOnly: false });
   harness.receive({ version: 1, type: 'activate', id: 'file' });
@@ -224,7 +225,21 @@ test('workers route CSS and HTML variants correctly and long diagnostics remain 
   assert.equal(harness.document.getElementById('status').textContent, message);
   harness.receive({ version: 1, type: 'theme', theme: 'vs' });
   assert.equal(harness.document.body.dataset.theme, 'vs');
-  await harness.entered();
-  harness.release();
-  await harness.finished();
+});
+
+test('read failures offer a retry for the known document without allowing arbitrary file access', async () => {
+  const harness = await startProbe(true);
+  harness.receive({ version: 1, type: 'open', id: 'unavailable', workspaceId: 'workspace', path: 'C:\\project\\missing.txt', text: 'Unable to read the file.', readOnly: true, reason: 'Unable to read the file.' });
+  harness.receive({ version: 1, type: 'activate', id: 'unavailable' });
+  const retry = harness.document.getElementById('retry-load');
+  assert.equal(retry.hidden, false);
+  assert.equal(harness.document.getElementById('save').disabled, true);
+  retry.onclick();
+  assert.deepEqual({ ...harness.messages.at(-1) }, { version: 1, type: 'retry-load', id: 'unavailable' });
+  harness.receive({ version: 1, type: 'open', id: 'editable', workspaceId: 'workspace', path: 'C:\\project\\file.txt', text: 'text', readOnly: false });
+  harness.receive({ version: 1, type: 'activate', id: 'editable' });
+  assert.equal(retry.hidden, true);
+  const count = harness.messages.length;
+  retry.onclick();
+  assert.equal(harness.messages.length, count);
 });

@@ -17,6 +17,19 @@ Get-Format
 ```
 After, go to Tools > Options > Text Editor > C++ > Formatting and check "Use custom clang-format.exe file" in Visual Studio and choose the clang-format.exe in the repository at /packages/clang-format.win-x86.10.0.0/tools/clang-format.exe by clicking "browse" right under the check box.
 
+### Offline workspace editor assets
+
+The workspace editor ships with every Terminal build. Install Node.js 22 or newer, then build the locked, local Monaco assets before building the application:
+
+```powershell
+Push-Location src/cascadia/EditorHostProbe
+npm.cmd ci --ignore-scripts --no-audit --no-fund
+npm.cmd run build
+Pop-Location
+```
+
+Repeat `npm.cmd run build` after changing the editor frontend. WebView2 Runtime is required when running the editor. See [workspace editor](webview-editor-integration.md) for tests and file-save limits.
+
 ### Building in PowerShell
 
 ```powershell

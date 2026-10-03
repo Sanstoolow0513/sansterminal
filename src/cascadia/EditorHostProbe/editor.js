@@ -5,6 +5,7 @@ import { createWorkspace, createCommandRegistry, registerBundledCommands, protoc
 
 const bridge = window.chrome.webview;
 const workspaceMode = new URLSearchParams(window.location?.search ?? '').get('workspace') === '1';
+const diagnosticMode = !workspaceMode || new URLSearchParams(window.location?.search ?? '').get('diagnostics') === '1';
 const send = (type, fields = {}) => bridge.postMessage(workspaceMode ? { version: protocolVersion, type, ...fields } : type);
 const status = document.querySelector('#status');
 const workspaceHint = '从终端工作区选择文件；Ctrl+S 保存，F6 返回终端。';
@@ -35,6 +36,9 @@ const views = new Map();
 let active = workspaceMode ? null : 'json';
 const editor = monaco.editor.create(document.querySelector('#editor'), {
   model: models.get(active) ?? null, automaticLayout: false, theme: 'vs-dark', minimap: { enabled: false },
+  // Use the established textarea composition and accessibility path in the
+  // native WebView2 host instead of the experimental browser EditContext API.
+  editContext: false,
   ariaLabel: workspaceMode ? '工作区文件编辑器' : 'Monaco 宿主验证编辑器',
 });
 let commands;
@@ -46,6 +50,7 @@ const workspace = workspaceMode ? createWorkspace({
     documentName.setAttribute('aria-label', documentName.textContent);
     status.textContent = document?.error ?? document?.reason ?? workspaceHint;
     documentSave.disabled = !document || workspace.commandContext().readOnly;
+    documentRetry.hidden = !document?.readOnly || !document?.reason;
     updateCommands();
   },
   onError: (message) => { status.textContent = message; },
@@ -53,6 +58,7 @@ const workspace = workspaceMode ? createWorkspace({
 }) : null;
 const documentName = document.querySelector('#document-name');
 const documentSave = document.querySelector('#save');
+const documentRetry = document.querySelector('#retry-load');
 const extensionButtons = [
   [document.querySelector('#uppercase'), 'selection.uppercase'],
   [document.querySelector('#timestamp'), 'insert.timestamp'],
@@ -62,12 +68,17 @@ function updateCommands() {
 }
 document.querySelector('#scratch-tools').hidden = workspaceMode;
 document.querySelector('#workspace-tools').hidden = !workspaceMode;
+for (const id of ['check', 'dialog', 'uppercase', 'timestamp']) document.querySelector(`#${id}`).hidden = !diagnosticMode;
 document.querySelector('#toolbar').setAttribute('aria-label', workspaceMode ? '文件编辑器' : '验证工具');
 if (workspace) {
   commands = createCommandRegistry(() => workspace.commandContext());
   registerBundledCommands(commands);
   for (const [button, id] of extensionButtons) button.onclick = () => commands.executeCommand(id);
   documentSave.onclick = () => workspace.save();
+  documentRetry.onclick = () => {
+    const document = workspace.getActive();
+    if (document?.readOnly) send('retry-load', { id: document.id });
+  };
   documentSave.disabled = true;
   updateCommands();
   status.textContent = workspaceHint;
@@ -196,4 +207,4 @@ else {
   activate(active, false);
   report('ready');
 }
-smoke();
+if (diagnosticMode) smoke();

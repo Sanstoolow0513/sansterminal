@@ -165,6 +165,11 @@
                                      x:Uid="Nav_Appearance"
                                      Tag="GlobalAppearance_Nav" />
 
+            <muxc:NavigationViewItem x:Name="WorkspaceLayoutNavItem"
+                                     x:Uid="Nav_WorkspaceLayout"
+                                     AutomationProperties.AutomationId="WorkspaceLayoutNavItem"
+                                     Tag="WorkspaceLayout_Nav" />
+
             <muxc:NavigationViewItem x:Name="CompatibilityNavItem"
                                      x:Uid="Nav_Compatibility"
                                      Tag="Compatibility_Nav" />

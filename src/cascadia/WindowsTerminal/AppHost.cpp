@@ -86,7 +86,7 @@ AppHost::AppHost(WindowEmperor* manager, const winrt::TerminalApp::AppLogic& log
 
 bool AppHost::OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down)
 {
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
     // The XAML focus tree still remembers the terminal while the native
     // browser owns focus. Do not deliver its shortcuts to that stale target.
     if (_editorProbe && _editorProbe->HasFocus()) return false;
@@ -325,26 +325,20 @@ void AppHost::Initialize()
 
     // Set up the content of the application. If the app has a custom titlebar,
     // set that content as well.
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
     wchar_t probeEnabled[2]{};
-    wchar_t workspaceEditorEnabled[2]{};
-    const auto workspaceEditor = GetEnvironmentVariableW(L"SANSTERMINAL_WORKSPACE_EDITOR", workspaceEditorEnabled, ARRAYSIZE(workspaceEditorEnabled)) == 1 && workspaceEditorEnabled[0] == L'1';
-    if (workspaceEditor || (GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1'))
-    {
-        _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); }, workspaceEditor);
-        _window->SetContent(_editorProbe->CreateContent());
-    }
-    else
+    const auto scratchProbe = GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1';
+    _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); }, !scratchProbe);
+    _window->SetContent(_editorProbe->CreateContent());
+#else
+    _window->SetContent(_windowLogic.GetRoot());
 #endif
-    {
-        _window->SetContent(_windowLogic.GetRoot());
-    }
     _window->OnAppInitialized();
 }
 
 void AppHost::Close()
 {
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
     if (_editorProbe) _editorProbe->Close();
     _editorProbe.reset();
 #endif
@@ -1120,7 +1114,7 @@ void AppHost::_IsQuakeWindowChanged(const winrt::Windows::Foundation::IInspectab
 void AppHost::_RequestQuitAll(const winrt::Windows::Foundation::IInspectable&,
                               const winrt::Windows::Foundation::IInspectable&)
 {
-    PostQuitMessage(0);
+    _windowManager->RequestQuitAll();
 }
 
 void AppHost::_ShowWindowChanged(const winrt::Windows::Foundation::IInspectable&,

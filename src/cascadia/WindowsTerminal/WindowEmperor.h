@@ -47,6 +47,7 @@ public:
     void CreateNewWindow(winrt::TerminalApp::WindowRequestedArgs args);
     void HandleCommandlineArgs(int nCmdShow);
     void FocusTabInAnyWindow(const winrt::TerminalApp::Tab& tab) const;
+    safe_void_coroutine RequestQuitAll();
     // OpenWindow is used for opening a new window or summoning an existing window by name.
     void OpenWindow(const winrt::hstring& name);
 
@@ -95,6 +96,7 @@ private:
     bool _notificationIconShown = false;
     bool _skipPersistence = false;
     bool _needsPersistenceCleanup = false;
+    bool _requestingQuitAll = false;
     SafeDispatcherTimer _persistStateTimer;
     SafeDispatcherTimer _handoffTimeoutTimer;
     std::optional<bool> _currentSystemThemeIsDark;

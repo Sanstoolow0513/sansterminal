@@ -6,7 +6,7 @@
 #include <WebView2.h>
 #include <filesystem>
 
-// Opt-in integration probe. Document ownership stays in TerminalPage. One instance
+// Offline workspace editor host. Document ownership stays in TerminalPage. One instance
 // owns one native WebView2 controller for the lifetime of its AppHost.
 class EditorHostProbe : public std::enable_shared_from_this<EditorHostProbe>
 {
@@ -19,10 +19,11 @@ public:
 
 private:
     void _Start();
-    HRESULT _Configure(ICoreWebView2Controller* controller);
+    HRESULT _Configure(ICoreWebView2Controller* controller, uint64_t generation);
     void _SyncBounds();
     winrt::fire_and_forget _FocusTerminal();
     winrt::fire_and_forget _FocusEditor();
+    winrt::fire_and_forget _DispatchWorkspaceKeyBinding(winrt::Microsoft::Terminal::Control::KeyChord keys, uint64_t generation);
     void _Report(std::wstring_view message);
     void _Fail(HRESULT result);
     winrt::fire_and_forget _ShowDialog();
@@ -60,5 +61,7 @@ private:
     bool _ready{ false };
     bool _failed{ false };
     bool _workspace{ false };
+    uint64_t _generation{ 0 };
+    std::chrono::steady_clock::time_point _startedAt;
     double _width{ 480.0 };
 };

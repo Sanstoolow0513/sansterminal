@@ -7,7 +7,7 @@
 #include "NonClientIslandWindow.h"
 #include <ThrottledFunc.h>
 
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
 #include "EditorHostProbe.h"
 #endif
 
@@ -41,7 +41,7 @@ private:
 
     WindowEmperor* _windowManager = nullptr;
     std::unique_ptr<IslandWindow> _window;
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
     std::shared_ptr<EditorHostProbe> _editorProbe;
 #endif
     winrt::TerminalApp::AppLogic _appLogic{ nullptr };

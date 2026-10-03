@@ -73,6 +73,7 @@ namespace winrt::TerminalApp::implementation
         NewTabButtonHost().VerticalAlignment(WUX::VerticalAlignment::Center);
         TabStripBottomBorder().Visibility(WUX::Visibility::Collapsed);
         NewTabButton().Height(32);
+        NewTabButton().FontSize(16);
         NewTabButton().Margin(WUX::ThicknessHelper::FromLengths(0, 0, 0, 0));
         FooterChrome().Visibility(WUX::Visibility::Collapsed);
 

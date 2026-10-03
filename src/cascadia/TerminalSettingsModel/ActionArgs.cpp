@@ -511,6 +511,8 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
             return RS_switchable_(L"OpenSettingsCommandKey");
         case SettingsTarget::Directory:
             return RS_switchable_(L"SettingsFileOpenInExplorerCommandKey");
+        case SettingsTarget::Workspace:
+            return RS_switchable_(L"OpenWorkspaceLayoutCommandKey");
         case SettingsTarget::SettingsUI:
         default:
             return RS_switchable_(L"OpenSettingsUICommandKey");

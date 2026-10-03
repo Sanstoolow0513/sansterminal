@@ -10,9 +10,17 @@
 - Visual Studio 2026 (18.6+)，工作负载：Desktop Development with C++、WinUI application development
 - Windows 11 SDK 10.0.26100.8249 或更高版本
 - PowerShell 7+
+- Node.js 22+（构建随应用打包的离线 Monaco 编辑器）；运行编辑器需要 WebView2 Runtime
 - 构建测试项目需要 .NET Framework 4.7.2 Targeting Pack
 
-可用 `winget configure .config\configuration.winget` 自动配置环境。
+可用 `winget configure .config\configuration.winget` 自动配置 C++ 构建环境。首次构建以及修改编辑器前端后，先生成离线资源：
+
+```powershell
+Push-Location src/cascadia/EditorHostProbe
+npm.cmd ci --ignore-scripts --no-audit --no-fund
+npm.cmd run build
+Pop-Location
+```
 
 PowerShell 构建：
 

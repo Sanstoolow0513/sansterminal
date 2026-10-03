@@ -42,6 +42,10 @@
   <Import Project="$(OpenConsoleDir)src\cppwinrt.build.pre.props" />
   <!-- ========================= Headers ======================== -->
   <ItemGroup>
+    <ClInclude Include="WorkspaceLayoutPage.h"><DependentUpon>WorkspaceLayoutPage.xaml</DependentUpon></ClInclude>
+    <ClCompile Include="WorkspaceLayoutPage.cpp"><DependentUpon>WorkspaceLayoutPage.xaml</DependentUpon></ClCompile>
+    <Page Include="WorkspaceLayoutPage.xaml"><Generator>MSBuild:Compile</Generator></Page>
+    <Midl Include="WorkspaceLayoutPage.idl"><DependentUpon>WorkspaceLayoutPage.xaml</DependentUpon></Midl>
     <ClInclude Include="Actions.h">
       <DependentUpon>Actions.xaml</DependentUpon>
     </ClInclude>

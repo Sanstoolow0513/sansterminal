@@ -84,6 +84,8 @@ namespace TerminalApp
         Windows.UI.Xaml.UIElement GetWorkspaceEditorSurface();
         void HandleWorkspaceEditorMessage(String message);
         void WorkspaceEditorFocused();
+        Boolean HasWorkspaceKeyBinding(Microsoft.Terminal.Control.KeyChord keys);
+        Boolean HandleWorkspaceKeyBinding(Microsoft.Terminal.Control.KeyChord keys);
         event Windows.Foundation.TypedEventHandler<Object, String> WorkspaceEditorMessage;
         void SetPersistedLayoutIdx(UInt32 idx);
         void RequestExitFullscreen();
@@ -100,6 +102,7 @@ namespace TerminalApp
         Single CalcSnappedDimension(Boolean widthOrHeight, Single dimension);
         void TitlebarClicked();
         void CloseWindow();
+        Windows.Foundation.IAsyncOperation<Boolean> TryCloseWindow();
         void WindowVisibilityChanged(Boolean showOrHide);
 
         TaskbarState TaskbarState{ get; };

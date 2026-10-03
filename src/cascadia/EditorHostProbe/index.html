@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Monaco host probe</title>
+<title>工作区文件编辑器</title>
 <link rel="stylesheet" href="editor.css">
 <style>
   html, body { margin: 0; height: 100%; font: 13px system-ui; }
@@ -31,6 +31,7 @@
   <span id="workspace-tools" hidden>
     <output id="document-name" aria-live="polite">等待选择文件</output>
     <button id="save" disabled>保存（Ctrl+S）</button>
+    <button id="retry-load" hidden>重新读取文件</button>
     <button id="uppercase" disabled>选区转大写</button>
     <button id="timestamp" disabled>插入时间</button>
   </span>

@@ -2911,4 +2911,91 @@
     <value>系统集成和通知</value>
     <comment>Title of a section that groups settings related to system integration and notifications.</comment>
   </data>
+  <data name="Nav_WorkspaceLayout.Content" xml:space="preserve">
+    <value>工作区布局</value>
+  </data>
+  <data name="Actions_SettingsTargetWorkspace.Content" xml:space="preserve">
+    <value>工作区设置</value>
+  </data>
+  <data name="WorkspaceLayoutDescription.Text" xml:space="preserve">
+    <value>独立安排文件树、终端和编辑器。将面板移到另一面板的左侧、右侧、上方或下方，也可以在预览中拖到另一面板的边缘。</value>
+  </data>
+  <data name="WorkspaceLayoutComposeHeading.Text" xml:space="preserve">
+    <value>安排面板</value>
+  </data>
+  <data name="WorkspaceLayoutVisibilityHeading.Text" xml:space="preserve">
+    <value>显示区域</value>
+  </data>
+  <data name="WorkspaceLayoutSourceLabel.Header" xml:space="preserve">
+    <value>移动</value>
+  </data>
+  <data name="WorkspaceLayoutTargetLabel.Header" xml:space="preserve">
+    <value>相对于</value>
+  </data>
+  <data name="WorkspaceLayoutSideLabel.Header" xml:space="preserve">
+    <value>位置</value>
+  </data>
+  <data name="WorkspaceLayoutMoveLabel.Content" xml:space="preserve">
+    <value>移动面板</value>
+  </data>
+  <data name="WorkspaceLayoutResetLabel.Content" xml:space="preserve">
+    <value>恢复默认布局</value>
+  </data>
+  <data name="WorkspaceLayoutRootRatioLabel.Header" xml:space="preserve">
+    <value>主分隔线位置（%）</value>
+  </data>
+  <data name="WorkspaceLayoutInnerRatioLabel.Header" xml:space="preserve">
+    <value>内部分隔线位置（%）</value>
+  </data>
+  <data name="WorkspaceShowFilesLabel.Header" xml:space="preserve">
+    <value>文件树</value>
+  </data>
+  <data name="WorkspaceShowTerminalLabel.Header" xml:space="preserve">
+    <value>终端</value>
+  </data>
+  <data name="WorkspaceShowEditorLabel.Header" xml:space="preserve">
+    <value>编辑器</value>
+  </data>
+  <data name="WorkspaceShowTabsLabel.Header" xml:space="preserve">
+    <value>标签栏</value>
+  </data>
+  <data name="WorkspaceLayoutShortcutHint.Text" xml:space="preserve">
+    <value>隐藏区域会保留终端和未保存的编辑内容。可在“快捷方式”中为各区域或打开此页绑定快捷键。点击“保存”应用更改，点击“放弃更改”恢复已保存的设置。</value>
+  </data>
+  <data name="WorkspacePaneFilesItem.Content" xml:space="preserve">
+    <value>文件树</value>
+  </data>
+  <data name="WorkspacePaneTerminalItem.Content" xml:space="preserve">
+    <value>终端</value>
+  </data>
+  <data name="WorkspacePaneEditorItem.Content" xml:space="preserve">
+    <value>编辑器</value>
+  </data>
+  <data name="WorkspaceSideLeft.Content" xml:space="preserve">
+    <value>左侧</value>
+  </data>
+  <data name="WorkspaceSideRight.Content" xml:space="preserve">
+    <value>右侧</value>
+  </data>
+  <data name="WorkspaceSideAbove.Content" xml:space="preserve">
+    <value>上方</value>
+  </data>
+  <data name="WorkspaceSideBelow.Content" xml:space="preserve">
+    <value>下方</value>
+  </data>
+  <data name="WorkspacePaneFiles" xml:space="preserve">
+    <value>文件树</value>
+  </data>
+  <data name="WorkspacePaneTerminal" xml:space="preserve">
+    <value>终端</value>
+  </data>
+  <data name="WorkspacePaneEditor" xml:space="preserve">
+    <value>编辑器</value>
+  </data>
+  <data name="WorkspacePaneTabs" xml:space="preserve">
+    <value>标签栏</value>
+  </data>
+  <data name="WorkspaceLayoutChooseDifferentPanes" xml:space="preserve">
+    <value>请选择两个不同的面板。</value>
+  </data>
 </root>

@@ -1072,6 +1072,43 @@ void WindowEmperor::_createMessageWindow(const wchar_t* className)
     StringCchCopy(_notificationIcon.szTip, ARRAYSIZE(_notificationIcon.szTip), appNameLoc.c_str());
 }
 
+// Close one window at a time so each window can flush its editor and present
+// its own unsaved-changes dialog. Cancellation leaves that window and the
+// remaining windows running; it never bypasses another window's documents.
+safe_void_coroutine WindowEmperor::RequestQuitAll()
+{
+    _assertIsMainThread();
+    if (_requestingQuitAll)
+    {
+        co_return;
+    }
+    _requestingQuitAll = true;
+    const auto reset = wil::scope_exit([this]() noexcept { _requestingQuitAll = false; });
+    const auto windows = _windows;
+    for (const auto& host : windows)
+    {
+        if (std::find(_windows.begin(), _windows.end(), host) == _windows.end())
+        {
+            continue;
+        }
+        const auto logic = host->Logic();
+        const auto dispatcher = logic.GetRoot().Dispatcher();
+        if (!co_await logic.TryCloseWindow())
+        {
+            co_return;
+        }
+        // Let the queued WM_CLOSE_TERMINAL_WINDOW dispose this host before
+        // opening a dialog in the next XAML root.
+        co_await wil::resume_foreground(dispatcher, winrt::Windows::UI::Core::CoreDispatcherPriority::Low);
+    }
+    // Explicit quit also exits a headless process, once all confirmed close
+    // requests have been processed. A newly opened window keeps it alive.
+    if (_windowCount <= 0 && _messageBoxCount <= 0)
+    {
+        PostQuitMessage(0);
+    }
+}
+
 // Posts a WM_QUIT as soon as we have no reason to exist anymore.
 // That basically means no windows and no message boxes.
 void WindowEmperor::_postQuitMessageIfNeeded() const

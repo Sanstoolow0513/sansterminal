@@ -21,20 +21,23 @@ function fixture() {
         let eol = '\n';
         let revision = 1;
         let nextRevision = 1;
+        let version = 1;
         let history = [{ value, revision }];
         let index = 0;
         const listeners = new Set();
-        const notify = () => { for (const listener of listeners) listener(); };
+        const notify = () => { ++version; for (const listener of listeners) listener(); };
         const restore = () => { ({ value, revision } = history[index]); notify(); };
         const offset = (line, column) => value.split(eol).slice(0, line - 1).reduce((length, part) => length + part.length + eol.length, 0) + column - 1;
         const model = {
           uri, disposed: false, listeners,
           getValue: () => value,
           getAlternativeVersionId: () => revision,
+          getVersionId: () => version,
           setEOL(sequence) {
             eol = sequence ? '\r\n' : '\n';
             value = value.replace(/\r?\n/g, eol);
             revision = ++nextRevision;
+            ++version;
             history = [{ value, revision }];
             index = 0;
           },
@@ -106,16 +109,41 @@ test('an asynchronous save acknowledges its snapshot, leaves later edits dirty a
   const f = fixture();
   const model = f.open('file');
   f.insert('save ');
-  const savedRevision = model.getAlternativeVersionId();
+  const savedRevision = model.getVersionId();
+  const savedAlternativeRevision = model.getAlternativeVersionId();
   assert.equal(f.app.save(), true);
   assert.deepEqual(f.messages.at(-1), { version: 1, type: 'save', id: 'file', text: 'save original\n', revision: savedRevision });
   f.insert('later ');
   f.receive('saved', { id: 'file', revision: savedRevision });
   assert.equal(f.app.isDirty('file'), true);
   model.undo();
-  assert.equal(model.getAlternativeVersionId(), savedRevision);
+  assert.equal(model.getAlternativeVersionId(), savedAlternativeRevision);
+  assert.ok(model.getVersionId() > savedRevision);
   assert.equal(f.app.isDirty('file'), false);
   assert.equal(f.messages.at(-1).dirty, false);
+});
+
+test('native save accelerator snapshots only the active editable document and respects close suspension', () => {
+  const f = fixture();
+  assert.equal(f.receive('save-active'), true);
+  assert.equal(f.messages.length, 0);
+  f.open('first');
+  f.insert('first ');
+  f.open('second');
+  f.insert('active ');
+  assert.equal(f.receive('save-active'), true);
+  assert.deepEqual(f.messages.at(-1), { version: 1, type: 'save', id: 'second', text: 'active original\n', revision: f.editor.getModel().getVersionId() });
+  f.receive('flush', { requestId: 'closing' });
+  const suspendedCount = f.messages.length;
+  f.receive('save-active');
+  assert.equal(f.messages.length, suspendedCount);
+  f.receive('resume');
+  f.receive('save-active');
+  assert.equal(f.messages.at(-1).type, 'save');
+  f.open('readonly', { readOnly: true });
+  const readonlyCount = f.messages.length;
+  f.receive('save-active');
+  assert.equal(f.messages.length, readonlyCount);
 });
 
 test('out-of-order save acknowledgements cannot replace a newer saved baseline', () => {
@@ -123,10 +151,10 @@ test('out-of-order save acknowledgements cannot replace a newer saved baseline',
   const model = f.open('file');
   f.insert('one ');
   f.app.save();
-  const first = model.getAlternativeVersionId();
+  const first = model.getVersionId();
   f.insert('two ');
   f.app.save();
-  const second = model.getAlternativeVersionId();
+  const second = model.getVersionId();
   f.receive('saved', { id: 'file', revision: second });
   f.receive('saved', { id: 'file', revision: first });
   assert.equal(f.app.isDirty('file'), false);
@@ -137,12 +165,12 @@ test('out-of-order save acknowledgements cannot replace a newer saved baseline',
 test('native dialog saves may acknowledge the current revision but unrelated old revisions are ignored', () => {
   const f = fixture();
   const model = f.open('file', { dirty: true });
-  const originalRevision = model.getAlternativeVersionId();
+  const originalRevision = model.getVersionId();
   assert.equal(f.app.isDirty('file'), true);
   f.insert('new ');
   f.receive('saved', { id: 'file', revision: originalRevision });
   assert.equal(f.app.isDirty('file'), true);
-  f.receive('saved', { id: 'file', revision: model.getAlternativeVersionId() });
+  f.receive('saved', { id: 'file', revision: model.getVersionId() });
   assert.equal(f.app.isDirty('file'), false);
 });
 
@@ -150,7 +178,7 @@ test('EOL follows source content or the native encoding hint, and restored buffe
   const f = fixture();
   const model = f.open('windows', { text: 'one\ntwo\n', eol: 'crlf', dirty: true });
   assert.equal(model.getValue(), 'one\r\ntwo\r\n');
-  assert.equal(f.messages[0].revision, model.getAlternativeVersionId());
+  assert.equal(f.messages[0].revision, model.getVersionId());
   assert.equal(f.messages[0].dirty, true);
   assert.equal(f.open('detected', { text: 'one\r\ntwo\r\n' }).getValue(), 'one\r\ntwo\r\n');
   assert.equal(f.open('unix', { text: 'one\ntwo\n' }).getValue(), 'one\ntwo\n');
@@ -276,7 +304,7 @@ test('document errors follow their buffer and clear after editing or a successfu
   f.insert('editing ');
   assert.equal(f.app.getActive().error, null);
   f.app.save();
-  const revision = f.app.getActive().model.getAlternativeVersionId();
+  const revision = f.app.getActive().model.getVersionId();
   f.receive('error', { id: 'conflict', message: 'Save failed.' });
   assert.equal(f.app.getActive().error, 'Save failed.');
   f.receive('saved', { id: 'conflict', revision });

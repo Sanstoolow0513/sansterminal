@@ -114,7 +114,8 @@
       <DependentUpon>TerminalPage.xaml</DependentUpon>
       <SubType>Code</SubType>
     </ClInclude>
-    <ClInclude Include="WorkspaceSyntaxHighlighter.h" />
+    <ClInclude Include="WorkspaceDocument.h" />
+    <ClInclude Include="WorkspaceEditorBuffer.h" />
     <ClInclude Include="WorkspaceEditorBuffer.h" />
     <ClInclude Include="TerminalTabStatus.h">
       <DependentUpon>TerminalTabStatus.idl</DependentUpon>

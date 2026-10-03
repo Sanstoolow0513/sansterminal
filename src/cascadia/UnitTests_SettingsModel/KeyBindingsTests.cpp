@@ -6,6 +6,7 @@
 #include "../TerminalSettingsModel/ColorScheme.h"
 #include "../TerminalSettingsModel/CascadiaSettings.h"
 #include "../TerminalSettingsModel/ActionMap.h"
+#include "../TerminalSettingsModel/ActionAndArgs.h"
 #include "JsonTestClass.h"
 #include "TestUtils.h"
 
@@ -40,6 +41,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(TestMoveTabArgs);
         TEST_METHOD(TestGetKeyBindingForAction);
         TEST_METHOD(KeybindingsWithoutVkey);
+        TEST_METHOD(WorkspaceLayoutActions);
     };
 
     void KeyBindingsTests::KeyChords()
@@ -807,5 +809,50 @@ namespace SettingsModelUnitTests
 
         const auto action = actionMap->GetActionByKeyChord({ VirtualKeyModifiers::Shift, 0, 255 });
         VERIFY_IS_NOT_NULL(action);
+    }
+
+    void KeyBindingsTests::WorkspaceLayoutActions()
+    {
+        struct TestCase
+        {
+            ShortcutAction action;
+            const char* jsonName;
+            int32_t vkey;
+        };
+        constexpr std::array cases{
+            TestCase{ ShortcutAction::ToggleWorkspaceFiles, "toggleWorkspaceFiles", VK_F9 },
+            TestCase{ ShortcutAction::ToggleWorkspaceTerminal, "toggleWorkspaceTerminal", VK_F10 },
+            TestCase{ ShortcutAction::ToggleWorkspaceEditor, "toggleWorkspaceEditor", VK_F11 },
+            TestCase{ ShortcutAction::ToggleWorkspaceTabs, "toggleWorkspaceTabs", VK_F12 },
+            TestCase{ ShortcutAction::OpenWorkspaceLayout, "openWorkspaceLayout", 'L' },
+        };
+        const auto names = implementation::ActionArgFactory::AvailableShortcutActionsAndNames();
+        const auto actionMap = winrt::make_self<implementation::ActionMap>();
+        for (const auto& testCase : cases)
+        {
+            std::vector<SettingsLoadWarnings> warnings;
+            const auto parsed = implementation::ActionAndArgs::FromJson(Json::Value{ testCase.jsonName }, warnings);
+            VERIFY_IS_TRUE(warnings.empty());
+            VERIFY_ARE_EQUAL(testCase.action, parsed->Action());
+            VERIFY_IS_NULL(parsed->Args());
+            VERIFY_ARE_EQUAL(std::string{ testCase.jsonName }, implementation::ActionAndArgs::ToJson(*parsed).asString());
+            VERIFY_IS_TRUE(names.HasKey(testCase.action));
+            VERIFY_IS_FALSE(names.Lookup(testCase.action).empty());
+
+            const KeyChord chord{ true, true, false, false, testCase.vkey, 0 };
+            Json::Value binding;
+            binding["command"] = testCase.jsonName;
+            binding["id"] = std::string{ "Test." } + testCase.jsonName;
+            binding["keys"] = winrt::to_string(KeyChordSerialization::ToString(chord));
+            Json::Value bindings{ Json::arrayValue };
+            bindings.append(std::move(binding));
+            actionMap->LayerJson(bindings, OriginTag::None);
+            VERIFY_ARE_EQUAL(testCase.action, actionMap->GetActionByKeyChord(chord).ActionAndArgs().Action());
+        }
+        std::vector<SettingsLoadWarnings> warnings;
+        const auto settings = implementation::ActionAndArgs::FromJson(VerifyParseSucceeded(R"({"action":"openSettings","target":"workspace"})"), warnings);
+        VERIFY_IS_TRUE(warnings.empty());
+        VERIFY_ARE_EQUAL(SettingsTarget::Workspace, settings->Args().as<OpenSettingsArgs>().Target());
+        VERIFY_ARE_EQUAL(std::string{ "workspace" }, implementation::ActionAndArgs::ToJson(*settings)["target"].asString());
     }
 }

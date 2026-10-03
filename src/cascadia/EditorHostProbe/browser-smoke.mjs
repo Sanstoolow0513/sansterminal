@@ -80,7 +80,7 @@ try {
   await call('Page.enable');
   await call('Runtime.enable');
   await call('Page.addScriptToEvaluateOnNewDocument', { source: `window.__messages=[];window.__workerUrls=[];window.__receive=()=>{};const NativeWorker=window.Worker;window.Worker=class extends NativeWorker{constructor(...args){window.__workerUrls.push(String(args[0]));super(...args)}};window.chrome={webview:{postMessage(message){window.__messages.push(message)},addEventListener(type,callback){window.__receive=data=>callback({data})}}};` });
-  await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/index.html?workspace=1` });
+  await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/index.html?workspace=1&diagnostics=1` });
   await waitFor(`window.__messages?.some(message => message.type === 'report' && message.message.startsWith('smoke-'))`);
   const report = await evaluate(`window.__messages.find(message => message.type === 'report' && message.message.startsWith('smoke-')).message`);
   assert.match(report, /^smoke-ok:/);
@@ -98,7 +98,7 @@ try {
   await key('z', 'KeyZ', 2);
   await waitFor(`window.__messages.filter(message => message.type === 'changed').at(-1).text === ${JSON.stringify('edited original\n')}`);
 
-  await click('save');
+  await host('save-active');
   const saved = await evaluate(`window.__messages.filter(message => message.type === 'save').at(-1)`);
   assert.equal(saved.text, 'edited original\n');
   await host('saved', { id: saved.id, revision: saved.revision });

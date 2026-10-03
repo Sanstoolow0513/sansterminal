@@ -19,7 +19,8 @@
 #include "Toast.h"
 
 #include "WindowsPackageManagerFactory.h"
-#include "WorkspaceSyntaxHighlighter.h"
+#include "WorkspaceDocument.h"
+#include "../TerminalSettingsModel/WorkspaceLayout.h"
 
 #include <filesystem>
 
@@ -175,6 +176,7 @@ namespace winrt::TerminalApp::implementation
 
         safe_void_coroutine RequestQuit();
         safe_void_coroutine CloseWindow();
+        Windows::Foundation::IAsyncOperation<bool> TryCloseWindow();
         winrt::Microsoft::Terminal::Settings::Model::WindowLayout GetWindowLayout();
         void PersistState();
         std::vector<IPaneContent> Panes() const;
@@ -218,7 +220,7 @@ namespace winrt::TerminalApp::implementation
         bool CanDragDrop() const noexcept;
         bool IsRunningElevated() const noexcept;
 
-        void OpenSettingsUI();
+        void OpenSettingsUI(Microsoft::Terminal::Settings::Model::SettingsTarget target = Microsoft::Terminal::Settings::Model::SettingsTarget::SettingsUI);
         void WindowActivated(const bool activated);
         bool FocusTab(const winrt::TerminalApp::Tab& tab);
         void FocusActiveTerminal();
@@ -227,6 +229,8 @@ namespace winrt::TerminalApp::implementation
         Windows::UI::Xaml::UIElement GetWorkspaceEditorSurface();
         void HandleWorkspaceEditorMessage(const winrt::hstring& message);
         void WorkspaceEditorFocused();
+        bool HasWorkspaceKeyBinding(const Microsoft::Terminal::Control::KeyChord& keys);
+        bool HandleWorkspaceKeyBinding(const Microsoft::Terminal::Control::KeyChord& keys);
 
         bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
@@ -305,10 +309,9 @@ namespace winrt::TerminalApp::implementation
             std::filesystem::path currentDirectory;
             winrt::TerminalApp::Tab lastFocused{ nullptr };
             std::filesystem::path selectedDocument;
-            double explorerWidth{ 250.0 };
-            double documentWidth{ 520.0 };
+            Sansterminal::WorkspaceLayout::Layout panelLayout{ Sansterminal::WorkspaceLayout::Layout::Default() };
             bool documentVisible{ false };
-            bool preferTerminalInCompactView{ false };
+            bool preferTerminalFocus{ false };
             Microsoft::UI::Xaml::Controls::TreeViewNode navigationNode{ nullptr };
             std::vector<WorkspaceFileEntry> fileEntries;
             Microsoft::UI::Xaml::Controls::TreeViewNode fileRoot{ nullptr };
@@ -318,13 +321,6 @@ namespace winrt::TerminalApp::implementation
             winrt::hstring treeStatus;
             double treeScrollOffset{ 0.0 };
             double searchScrollOffset{ 0.0 };
-            winrt::hstring previewRtf;
-            winrt::hstring previewStatus;
-            std::filesystem::path previewPath;
-            int32_t previewSelectionStart{ 0 };
-            int32_t previewSelectionEnd{ 0 };
-            double previewScrollOffset{ 0.0 };
-            size_t previewLineCount{ 0 };
         };
         struct WorkspaceNavigationEntry
         {
@@ -338,17 +334,10 @@ namespace winrt::TerminalApp::implementation
             Microsoft::UI::Xaml::Controls::TabViewItem tab{ nullptr };
             bool pinned{ false };
             winrt::hstring id;
-            winrt::hstring text;
-            winrt::hstring savedText;
-            winrt::hstring readOnlyReason;
-            std::string originalBytes;
-            uint64_t revision{ 0 };
-            bool loaded{ false };
-            bool readOnly{ true };
-            bool dirty{ false };
-            bool utf16{ false };
-            bool bom{ false };
-            bool crlf{ false };
+            WorkspaceEditor::Document model;
+            bool loading{ false };
+            bool saving{ false };
+            uint32_t pendingSaves{ 0 };
             bool synchronizationFailed{ false };
         };
         std::vector<WorkspaceSession> _workspaces;
@@ -359,7 +348,9 @@ namespace winrt::TerminalApp::implementation
         std::vector<WorkspaceDocument> _workspaceDocuments;
         bool _workspaceEditorEnabled{ false };
         bool _workspaceEditorReady{ false };
+        uint64_t _workspaceEditorGeneration{ 0 };
         bool _displayingDocumentCloseDialog{ false };
+        bool _tryingCloseWindow{ false };
         uint64_t _nextWorkspaceDocumentId{ 0 };
         uint64_t _nextWorkspaceEditorFlushId{ 0 };
         winrt::hstring _workspaceEditorFlushId;
@@ -369,10 +360,8 @@ namespace winrt::TerminalApp::implementation
         bool _updatingDocumentTabs{ false };
         bool _restoringWorkspaceView{ false };
         uint64_t _workspaceSearchVersion{ 0 };
-        uint64_t _workspaceDocumentVersion{ 0 };
-        winrt::hstring _workspacePreviewWorkspaceId;
-        std::filesystem::path _workspacePreviewPath;
-        size_t _workspaceDocumentLineCount{ 0 };
+        winrt::hstring _workspaceDisplayedWorkspaceId;
+        std::filesystem::path _workspaceDisplayedPath;
         bool _hasStartupActions{ false };
         bool _startupActionsRestoreLayout{ false };
         bool _restoringLayout{ false };
@@ -418,7 +407,9 @@ namespace winrt::TerminalApp::implementation
         void _LoadWorkspaceDocument(const std::filesystem::path& path);
         WorkspaceDocument* _FindWorkspaceDocument(const winrt::hstring& id);
         void _ReadWorkspaceEditorDocument(WorkspaceDocument& document);
-        bool _SaveWorkspaceEditorDocument(WorkspaceDocument& document);
+        safe_void_coroutine _ReadWorkspaceEditorDocumentAsync(winrt::hstring id, std::filesystem::path path);
+        Windows::Foundation::IAsyncOperation<bool> _SaveWorkspaceEditorDocument(winrt::hstring id);
+        safe_void_coroutine _RequestWorkspaceEditorSave(winrt::hstring id);
         void _SendWorkspaceEditorDocument(const WorkspaceDocument& document);
         void _SendWorkspaceEditorMessage(const winrt::hstring& type, const winrt::hstring& id = {});
         void _FocusWorkspaceDocument();
@@ -426,12 +417,24 @@ namespace winrt::TerminalApp::implementation
         safe_void_coroutine _CloseWorkspaceDocument(winrt::hstring id);
         void _ApplyWorkspaceDocumentTheme();
         void _WorkspaceDocumentThemeChanged(const Windows::UI::Xaml::FrameworkElement& sender, const IInspectable& args);
-        safe_void_coroutine _ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, bool dark, uint64_t version);
-        void _UpdateWorkspaceDocumentCaretStatus();
-        void _WorkspaceDocumentCaretChanged(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceTerminalGotFocus(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _WorkspaceDocumentGotFocus(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        bool _workspaceHomeRoute{ false };
+        bool _settingsReturnToHome{ false };
+        winrt::hstring _settingsTemporaryWorkspaceId;
+        void _RestoreWorkspaceAfterSettingsClose(bool selected);
+        bool _updatingWorkspacePanelLayout{ false };
+        bool _workspaceShowFiles{ true };
+        bool _workspaceShowTerminal{ true };
+        bool _workspaceShowEditor{ true };
+        bool _workspaceShowTabs{ true };
+        winrt::hstring _workspaceLayoutSetting;
+        Sansterminal::WorkspaceLayout::Layout _workspaceDefaultLayout{ Sansterminal::WorkspaceLayout::Layout::Default() };
+        Sansterminal::WorkspaceLayout::Geometry _workspaceGeometry;
+        void _ApplyWorkspaceLayoutSettings();
+        void _ToggleWorkspacePane(std::wstring_view pane);
         void _UpdateWorkspaceDocumentLayout();
+        void _ResizeWorkspaceSplit(size_t index, double horizontal, double vertical);
+        void _WorkspaceLayoutClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
         void _WorkspaceDocumentSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
         void _WorkspaceDocumentTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& args);
         void _WorkspaceContentSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);

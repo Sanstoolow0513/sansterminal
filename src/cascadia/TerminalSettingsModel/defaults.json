@@ -542,6 +542,11 @@
         { "command": { "action": "showSuggestions", "source": "all"}, "id": "Terminal.Suggestions" },
         { "command": "openCWD", "id": "Terminal.OpenCWD" },
         { "command": "workspaces", "id": "Terminal.Workspaces" },
+        { "command": "toggleWorkspaceFiles", "id": "Terminal.ToggleWorkspaceFiles" },
+        { "command": "toggleWorkspaceTerminal", "id": "Terminal.ToggleWorkspaceTerminal" },
+        { "command": "toggleWorkspaceEditor", "id": "Terminal.ToggleWorkspaceEditor" },
+        { "command": "toggleWorkspaceTabs", "id": "Terminal.ToggleWorkspaceTabs" },
+        { "command": "openWorkspaceLayout", "id": "Terminal.OpenWorkspaceLayout" },
 
         // Tab Management
         // "command": "closeTab" is unbound by default.

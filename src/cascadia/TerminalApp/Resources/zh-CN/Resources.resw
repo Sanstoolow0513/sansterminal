@@ -1168,4 +1168,10 @@
   <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
     <value>切换工作区</value>
   </data>
+  <data name="WorkspaceLayoutButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>调整工作区面板布局</value>
+  </data>
+  <data name="WorkspaceLayoutButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>调整工作区面板布局</value>
+  </data>
 </root>

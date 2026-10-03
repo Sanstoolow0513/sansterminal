@@ -31,6 +31,85 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
+    static bool isWorkspaceLayoutAction(const ActionAndArgs& action)
+    {
+        if (!action)
+        {
+            return false;
+        }
+        switch (action.Action())
+        {
+        case ShortcutAction::ToggleWorkspaceFiles:
+        case ShortcutAction::ToggleWorkspaceTerminal:
+        case ShortcutAction::ToggleWorkspaceEditor:
+        case ShortcutAction::ToggleWorkspaceTabs:
+        case ShortcutAction::OpenWorkspaceLayout:
+            return true;
+        case ShortcutAction::OpenSettings:
+            if (const auto args = action.Args().try_as<OpenSettingsArgs>())
+            {
+                return args.Target() == SettingsTarget::Workspace;
+            }
+            return false;
+        default:
+            return false;
+        }
+    }
+
+    bool TerminalPage::HasWorkspaceKeyBinding(const KeyChord& keys)
+    {
+        if (const auto actionMap = _settings.ActionMap())
+        {
+            if (const auto command = actionMap.GetActionByKeyChord(keys))
+            {
+                return isWorkspaceLayoutAction(command.ActionAndArgs());
+            }
+        }
+        return false;
+    }
+
+    bool TerminalPage::HandleWorkspaceKeyBinding(const KeyChord& keys)
+    {
+        if (const auto actionMap = _settings.ActionMap())
+        {
+            if (const auto command = actionMap.GetActionByKeyChord(keys); command && isWorkspaceLayoutAction(command.ActionAndArgs()))
+            {
+                return _actionDispatch->DoAction(command.ActionAndArgs());
+            }
+        }
+        return false;
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceFiles(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"files");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceTerminal(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"terminal");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceEditor(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"editor");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceTabs(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"tabs");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleOpenWorkspaceLayout(const IInspectable&, const ActionEventArgs& args)
+    {
+        OpenSettingsUI(SettingsTarget::Workspace);
+        args.Handled(true);
+    }
+
     TermControl TerminalPage::_senderOrActiveControl(const IInspectable& sender)
     {
         if (sender)

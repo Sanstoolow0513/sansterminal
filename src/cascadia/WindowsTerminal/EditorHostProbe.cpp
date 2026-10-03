@@ -149,7 +149,12 @@ UIElement EditorHostProbe::CreateContent()
     }
     _loaded = _layout.Loaded(winrt::auto_revoke, [weak](auto&&, auto&&) {
         if (const auto self = weak.lock())
-            self->_Start();
+        {
+            self->_popupTimer.Start();
+            if (!self->_workspace)
+                self->_Start();
+            self->_SyncBounds();
+        }
     });
     _layoutUpdated = _layout.LayoutUpdated(winrt::auto_revoke, [weak](auto&&, auto&&) {
         if (const auto self = weak.lock())
@@ -170,8 +175,8 @@ UIElement EditorHostProbe::CreateContent()
                 self->_FocusEditor();
         }
     });
-    // Popups can have a separate layout root. Poll only in this opt-in probe;
-    // a production host needs explicit overlay coordination for each surface.
+    // Native child windows sit above XAML. Track popup roots as well as the
+    // explicit dialog event so menus and dialogs can cover the editor safely.
     _popupTimer.Interval(std::chrono::milliseconds{ 50 });
     _popupTimer.Tick([weak](auto&&, auto&&) {
         if (const auto self = weak.lock())
@@ -185,16 +190,21 @@ void EditorHostProbe::_Start()
     if (_started || _closed)
         return;
     _started = true;
+    const auto generation = ++_generation;
+    _startedAt = std::chrono::steady_clock::now();
     _popupTimer.Start();
-    if (!std::filesystem::exists(_assets / L"index.html"))
+    constexpr std::array requiredAssets{
+        L"index.html", L"editor.js", L"editor.css", L"editor.worker.js", L"json.worker.js", L"ts.worker.js", L"css.worker.js", L"html.worker.js"
+    };
+    if (std::any_of(requiredAssets.begin(), requiredAssets.end(), [&](const auto asset) { return !std::filesystem::exists(_assets / asset); }))
     {
         _Fail(HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND));
         return;
     }
     const auto weak = weak_from_this();
-    const auto result = CreateCoreWebView2EnvironmentWithOptions(nullptr, _userData.c_str(), nullptr, Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([weak](HRESULT hr, ICoreWebView2Environment* environment) -> HRESULT {
+    const auto result = CreateCoreWebView2EnvironmentWithOptions(nullptr, _userData.c_str(), nullptr, Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([weak, generation](HRESULT hr, ICoreWebView2Environment* environment) -> HRESULT {
                                                                                                           const auto self = weak.lock();
-                                                                                                          if (!self || self->_closed)
+                                                                                                          if (!self || self->_closed || self->_generation != generation)
                                                                                                               return S_OK;
                                                                                                           if (FAILED(hr) || !environment)
                                                                                                           {
@@ -203,16 +213,16 @@ void EditorHostProbe::_Start()
                                                                                                           }
                                                                                                           self->_environment = environment;
                                                                                                           const auto result = environment->CreateCoreWebView2Controller(self->_nativeWindow.get(),
-                                                                                                                                                                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([weak](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                                                                                                                                                                        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([weak, generation](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                                                                                                                                                                             const auto owner = weak.lock();
-                                                                                                                                                                            if (!owner || owner->_closed)
+                                                                                                                                                                            if (!owner || owner->_closed || owner->_generation != generation)
                                                                                                                                                                             {
                                                                                                                                                                                 if (controller)
                                                                                                                                                                                     controller->Close();
                                                                                                                                                                                 return S_OK;
                                                                                                                                                                             }
                                                                                                                                                                             if (SUCCEEDED(result) && controller)
-                                                                                                                                                                                result = owner->_Configure(controller);
+                                                                                                                                                                                result = owner->_Configure(controller, generation);
                                                                                                                                                                             else if (SUCCEEDED(result))
                                                                                                                                                                                 result = E_POINTER;
                                                                                                                                                                             if (FAILED(result))
@@ -227,7 +237,7 @@ void EditorHostProbe::_Start()
         _Fail(result);
 }
 
-HRESULT EditorHostProbe::_Configure(ICoreWebView2Controller* controller)
+HRESULT EditorHostProbe::_Configure(ICoreWebView2Controller* controller, const uint64_t generation)
 try
 {
     _controller = controller;
@@ -256,9 +266,20 @@ try
     RETURN_IF_FAILED(_webview.query<ICoreWebView2_4>()->add_DownloadStarting(Callback<ICoreWebView2DownloadStartingEventHandler>([](auto*, auto* args) -> HRESULT { return args->put_Cancel(TRUE); }).Get(), &token));
 
     const auto weak = weak_from_this();
-    RETURN_IF_FAILED(_webview->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>([weak](auto*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+    RETURN_IF_FAILED(_webview->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>([weak, generation](auto*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                                           if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
+                                                           {
+                                                               BOOL succeeded = FALSE;
+                                                               RETURN_IF_FAILED(args->get_IsSuccess(&succeeded));
+                                                               if (!succeeded)
+                                                                   self->_Fail(E_FAIL);
+                                                           }
+                                                           return S_OK;
+                                                       }).Get(),
+                                                       &token));
+    RETURN_IF_FAILED(_webview->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>([weak, generation](auto*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
                                                           const auto self = weak.lock();
-                                                          if (!self || self->_closed)
+                                                          if (!self || self->_closed || self->_generation != generation)
                                                               return S_OK;
                                                           wil::unique_cotaskmem_string source;
                                                           wil::unique_cotaskmem_string text;
@@ -287,14 +308,56 @@ try
                                                           return S_OK;
                                                       }).Get(),
                                                       &token));
-    RETURN_IF_FAILED(_webview->add_ProcessFailed(Callback<ICoreWebView2ProcessFailedEventHandler>([weak](auto*, auto*) -> HRESULT {
-                                                     if (const auto self = weak.lock())
+    RETURN_IF_FAILED(_webview->add_ProcessFailed(Callback<ICoreWebView2ProcessFailedEventHandler>([weak, generation](auto*, auto*) -> HRESULT {
+                                                     if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
                                                          self->_Fail(E_UNEXPECTED);
                                                      return S_OK;
                                                  }).Get(),
                                                  &token));
-    RETURN_IF_FAILED(controller->add_GotFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak](auto*, auto*) -> HRESULT {
-                                                  if (const auto self = weak.lock())
+    RETURN_IF_FAILED(controller->add_AcceleratorKeyPressed(Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>([weak, generation](auto*, ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT {
+                                                               try
+                                                               {
+                                                                   const auto self = weak.lock();
+                                                                   if (!self || self->_closed || self->_generation != generation || !self->_workspace)
+                                                                       return S_OK;
+                                                                   UINT key{};
+                                                                   COREWEBVIEW2_KEY_EVENT_KIND kind{};
+                                                                   RETURN_IF_FAILED(args->get_VirtualKey(&key));
+                                                                   RETURN_IF_FAILED(args->get_KeyEventKind(&kind));
+                                                                   if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+                                                                       return S_OK;
+                                                                   const auto ctrl = GetKeyState(VK_CONTROL) < 0;
+                                                                   const auto alt = GetKeyState(VK_MENU) < 0;
+                                                                   const auto shift = GetKeyState(VK_SHIFT) < 0;
+                                                                   const auto win = GetKeyState(VK_LWIN) < 0 || GetKeyState(VK_RWIN) < 0;
+                                                                   COREWEBVIEW2_PHYSICAL_KEY_STATUS physical{};
+                                                                   RETURN_IF_FAILED(args->get_PhysicalKeyStatus(&physical));
+                                                                   const auto save = key == 'S' && ctrl && !alt && !shift && !win;
+                                                                   const winrt::Microsoft::Terminal::Control::KeyChord keys{ ctrl, alt, shift, win, static_cast<int32_t>(key), static_cast<int32_t>(physical.ScanCode) };
+                                                                   if (!save && !self->_logic.HasWorkspaceKeyBinding(keys))
+                                                                       return S_OK;
+                                                                   // Release the synchronous browser input event before
+                                                                   // saving or dispatching an action into XAML. Consuming
+                                                                   // the key also prevents a duplicate DOM command.
+                                                                   RETURN_IF_FAILED(args->put_Handled(TRUE));
+                                                                   if (physical.WasKeyDown || !self->_ready || !self->_webview)
+                                                                       return S_OK;
+                                                                   if (!save)
+                                                                   {
+                                                                       self->_DispatchWorkspaceKeyBinding(keys, generation);
+                                                                       return S_OK;
+                                                                   }
+                                                                   self->_Report(L"save-request: native accelerator");
+                                                                   const auto result = self->_webview->PostWebMessageAsJson(L"{\"version\":1,\"type\":\"save-active\"}");
+                                                                   if (FAILED(result))
+                                                                       self->_Report(std::wstring{ L"save-request-error: " } + std::to_wstring(result));
+                                                                   return result;
+                                                               }
+                                                               CATCH_RETURN();
+                                                           }).Get(),
+                                                           &token));
+    RETURN_IF_FAILED(controller->add_GotFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak, generation](auto*, auto*) -> HRESULT {
+                                                  if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
                                                   {
                                                       self->_focused = true;
                                                       if (self->_workspace)
@@ -303,14 +366,14 @@ try
                                                   return S_OK;
                                               }).Get(),
                                               &token));
-    RETURN_IF_FAILED(controller->add_LostFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak](auto*, auto*) -> HRESULT {
-                                                   if (const auto self = weak.lock())
+    RETURN_IF_FAILED(controller->add_LostFocus(Callback<ICoreWebView2FocusChangedEventHandler>([weak, generation](auto*, auto*) -> HRESULT {
+                                                   if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
                                                        self->_focused = false;
                                                    return S_OK;
                                                }).Get(),
                                                &token));
-    RETURN_IF_FAILED(controller->add_MoveFocusRequested(Callback<ICoreWebView2MoveFocusRequestedEventHandler>([weak](auto*, auto* args) -> HRESULT {
-                                                            if (const auto self = weak.lock())
+    RETURN_IF_FAILED(controller->add_MoveFocusRequested(Callback<ICoreWebView2MoveFocusRequestedEventHandler>([weak, generation](auto*, auto* args) -> HRESULT {
+                                                            if (const auto self = weak.lock(); self && !self->_closed && self->_generation == generation)
                                                                 self->_FocusTerminal();
                                                             return args->put_Handled(TRUE);
                                                         }).Get(),
@@ -355,7 +418,7 @@ try
             return E_INVALIDARG;
         _Report(diagnostic);
     }
-    else if (type == L"ready" || type == L"changed" || type == L"save" || type == L"flushed" || type == L"sync-error")
+    else if (type == L"ready" || type == L"changed" || type == L"save" || type == L"flushed" || type == L"sync-error" || type == L"retry-load")
     {
         if (type == L"ready")
         {
@@ -375,6 +438,11 @@ try
 {
     if (_closed || !_layout)
         return;
+    if (_started && !_failed && !_ready && std::chrono::steady_clock::now() - _startedAt > std::chrono::seconds{ 20 })
+    {
+        _Fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+        return;
+    }
     if (!_workspace)
     {
         const auto width = _shown ? std::min(_width, std::max(0.0, _layout.ActualWidth() - 240.0)) : 0.0;
@@ -391,6 +459,8 @@ try
         if (const auto visual = element.try_as<UIElement>())
             ancestorsVisible = visual.Visibility() == Visibility::Visible;
     }
+    if (_workspace && !_started && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0)
+        _Start();
     const auto visible = _controller && !_failed && _shown && !_modal && !popup && ancestorsVisible && _surface.ActualWidth() > 0 && _surface.ActualHeight() > 0 && !IsIconic(_parent);
     if (_visible != visible)
     {
@@ -467,6 +537,20 @@ winrt::fire_and_forget EditorHostProbe::_FocusEditor()
     CATCH_LOG();
 }
 
+winrt::fire_and_forget EditorHostProbe::_DispatchWorkspaceKeyBinding(winrt::Microsoft::Terminal::Control::KeyChord keys, const uint64_t generation)
+{
+    const auto keepAlive = shared_from_this();
+    try
+    {
+        co_await wil::resume_foreground(_layout.Dispatcher(), winrt::Windows::UI::Core::CoreDispatcherPriority::Low);
+        if (_closed || _generation != generation)
+            co_return;
+        if (_logic.HandleWorkspaceKeyBinding(keys))
+            _Report(L"workspace-shortcut: handled");
+    }
+    CATCH_LOG();
+}
+
 winrt::fire_and_forget EditorHostProbe::_ShowDialog()
 {
     const auto keepAlive = shared_from_this();
@@ -490,6 +574,7 @@ void EditorHostProbe::_Report(std::wstring_view message)
 
 void EditorHostProbe::_Fail(HRESULT result)
 {
+    ++_generation;
     _ready = false;
     _failed = true;
     if (_workspace)
@@ -524,6 +609,7 @@ void EditorHostProbe::_Reload()
 {
     if (_closed)
         return;
+    ++_generation;
     if (_controller)
         LOG_IF_FAILED(_controller->Close());
     _webview.reset();
@@ -545,6 +631,7 @@ void EditorHostProbe::Close() noexcept
 {
     if (std::exchange(_closed, true))
         return;
+    ++_generation;
     _loaded.revoke();
     _layoutUpdated.revoke();
     _dialogVisibility.revoke();

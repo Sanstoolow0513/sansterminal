@@ -986,4 +986,19 @@
   <data name="SplitSizeActionArgumentLocalized" xml:space="preserve">
     <value>拆分大小</value>
   </data>
+  <data name="ToggleWorkspaceFilesCommandKey" xml:space="preserve">
+    <value>显示或隐藏工作区文件树</value>
+  </data>
+  <data name="ToggleWorkspaceTerminalCommandKey" xml:space="preserve">
+    <value>显示或隐藏工作区终端</value>
+  </data>
+  <data name="ToggleWorkspaceEditorCommandKey" xml:space="preserve">
+    <value>显示或隐藏工作区编辑器</value>
+  </data>
+  <data name="ToggleWorkspaceTabsCommandKey" xml:space="preserve">
+    <value>显示或隐藏工作区标签栏</value>
+  </data>
+  <data name="OpenWorkspaceLayoutCommandKey" xml:space="preserve">
+    <value>打开工作区布局设置</value>
+  </data>
 </root>

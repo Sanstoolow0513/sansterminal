@@ -442,6 +442,7 @@
         "openTabRenamer",
         "openWindowRenamer",
         "openWorkspace",
+        "openWorkspaceLayout",
         "paste",
         "prevTab",
         "quakeMode",
@@ -480,6 +481,10 @@
         "toggleReadOnlyMode",
         "toggleShaderEffects",
         "toggleSplitOrientation",
+        "toggleWorkspaceFiles",
+        "toggleWorkspaceTerminal",
+        "toggleWorkspaceEditor",
+        "toggleWorkspaceTabs",
         "workspaces",
         "wt",
         "unbound"
@@ -1215,7 +1220,8 @@
                 "settingsFile",
                 "defaultsFile",
                 "allFiles",
-                "settingsUI"
+                "settingsUI",
+                "workspace"
               ]
             }
           }
@@ -2773,6 +2779,30 @@
           "default": false,
           "description": "If enabled, Terminal window will be hidden as soon as it loses focus.",
           "type": "boolean"
+        },
+        "workspaceLayout": {
+          "$ref": "#/$defs/WorkspaceLayoutSplit",
+          "description": "Composable workspace layout. files, terminal and editor must each occur exactly once."
+        },
+        "workspaceShowFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the workspace file tree. Hiding it preserves its content."
+        },
+        "workspaceShowTerminal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the workspace terminal. Hiding it preserves its content."
+        },
+        "workspaceShowEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the workspace editor. Hiding it preserves its content."
+        },
+        "workspaceShowTabs": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the workspace tabs. Hiding it preserves its content."
         }
       },
       "required": [
@@ -3363,6 +3393,53 @@
         }
       },
       "type": "array"
+    },
+    "WorkspaceLayoutNode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "files",
+            "terminal",
+            "editor"
+          ]
+        },
+        {
+          "$ref": "#/$defs/WorkspaceLayoutSplit"
+        }
+      ]
+    },
+    "WorkspaceLayoutSplit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "direction",
+        "ratio",
+        "first",
+        "second"
+      ],
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "row",
+            "column"
+          ],
+          "description": "row divides left/right; column divides top/bottom."
+        },
+        "ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "description": "Position of the divider as a fraction of its containing area."
+        },
+        "first": {
+          "$ref": "#/$defs/WorkspaceLayoutNode"
+        },
+        "second": {
+          "$ref": "#/$defs/WorkspaceLayoutNode"
+        }
+      }
     }
   },
   "allOf": [

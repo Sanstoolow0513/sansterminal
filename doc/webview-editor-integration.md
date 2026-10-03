@@ -1,6 +1,6 @@
-# WebView 工作区编辑器验证
+# 工作区编辑器与文档保存
 
-本验证分支 `verify/webview-editor-integration` 基于 `dev`。目标是验证能否用离线 Monaco 替换现有文件预览器，并让编辑器复用 Terminal 的文件树、文档标签、工作区、焦点和窗口生命周期。此前的 [Monaco 宿主验证](editor-host-probe.md) 保留为独立的临时缓冲区测试。
+工作区默认使用离线 Monaco 编辑器，复用 Terminal 的文件树、文档标签、工作区、焦点和窗口生命周期。旧 `RichEditBox` 与手工预览着色路径已移除。此前的 [Monaco 宿主验证](editor-host-probe.md) 保留为独立的临时缓冲区诊断。
 
 ## 启用
 
@@ -15,41 +15,42 @@ Pop-Location
 
 Import-Module .\tools\OpenConsole.psm1
 Set-MsBuildDevEnvironment
-msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Configuration=Debug /p:EnableEditorHostProbe=true /p:CL_MPCount=2 /m:1
+msbuild OpenConsole.slnx /t:"Terminal\CascadiaPackage" /p:Platform=x64 /p:Configuration=Debug /p:CL_MPCount=2 /m:1
 & "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\DeployAppRecipe.exe" src\cascadia\CascadiaPackage\bin\x64\Debug\CascadiaPackage.build.appxrecipe
 
-$env:SANSTERMINAL_WORKSPACE_EDITOR = '1'
-try {
-    & "$env:LOCALAPPDATA\Microsoft\WindowsApps\wtd.exe" -w new nt --title WebViewEditorValidation cmd.exe /d /k echo WebViewEditorValidation
-} finally {
-    Remove-Item Env:\SANSTERMINAL_WORKSPACE_EDITOR
-}
+& "$env:LOCALAPPDATA\Microsoft\WindowsApps\wtd.exe" -w new nt --title WorkspaceEditorValidation cmd.exe /d /k echo WorkspaceEditorValidation
 ```
 
-部署前关闭开发包窗口。商店版 Windows Terminal 不受此开关影响。构建开关与当前启动的环境变量都必须启用；只有 `SANSTERMINAL_EDITOR_PROBE=1` 时继续运行原临时缓冲区验证。两个环境变量同时启用时优先使用工作区编辑器。
+部署前关闭开发包窗口。WebView2 依赖和离线资源现在默认构建及打包，无需 `EnableEditorHostProbe` 或 `SANSTERMINAL_WORKSPACE_EDITOR`。仅 `SANSTERMINAL_EDITOR_PROBE=1` 启用临时缓冲区诊断；普通启动不运行自检、不显示验证工具。开发包与商店版 Windows Terminal 分开。
 
-工作区文件树目前位于左侧标签布局，先在设置中选择左侧标签并重启。打开文件夹后，点击文件使用原文档区域；不会添加第二个编辑器侧栏。`Ctrl+S` 保存，`F6` 返回终端。
+工作区标签栏可在外观设置中选择左侧并调整宽度。打开文件夹后，点击文件进入编辑区；顶栏布局按钮进入“设置 → 工作区布局”。文件树、终端和编辑器可相对另一面板移动到左侧、右侧、上方或下方，也可在预览中拖到目标边缘，支持嵌套组合。两条比例滑块调整主分隔线和内部分隔线位置，点击“保存”后持久化；页底“放弃更改”取消本次设置编辑，页内“恢复默认布局”恢复布局与显示开关。`Ctrl+S` 保存文档，`F6` 返回终端。
+
+文件树、终端、编辑器和标签栏各有独立显示开关，窄窗口也按用户选择显示，焦点变化不自动隐藏另一面板。隐藏区域保留终端连接、文档、撤销和查看位置；所有区域隐藏时，顶栏仍可打开工作区布局设置。设置页始终使用完整内容区域。
+
+布局通过 `workspaceLayout` JSON 对象保存，节点使用 `direction: row/column`、`ratio`、`first`、`second`；三个叶子 `files/terminal/editor` 各出现一次。四个默认显示设置为 `workspaceShowFiles/workspaceShowTerminal/workspaceShowEditor/workspaceShowTabs`。在“设置 → 快捷方式”可绑定 `toggleWorkspaceFiles`、`toggleWorkspaceTerminal`、`toggleWorkspaceEditor`、`toggleWorkspaceTabs` 和 `openWorkspaceLayout`；切换命令控制当前窗口的显示状态，不新增默认组合键。
 
 ## 集成职责
 
 | 层 | 职责 |
 | --- | --- |
-| TerminalPage | 文档身份、已授权路径、原始磁盘内容、当前缓冲区、编码、未保存状态、保存冲突和关闭提示；复用文件树、标签和工作区布局 |
+| WorkspaceDocument.h / WorkspaceEditor::DocumentService | 文档缓冲、磁盘基线、编码、保存快照、文件身份和原子保存；读写由调用层调度到后台 |
+| TerminalPage | 文档身份及已授权路径、标签和布局、异步服务调度、消息验证、关闭同步和未保存提示 |
+| WorkspaceLayout.h / WorkspaceLayoutPage | 共用布局树、隐藏叶子折叠和分隔线几何；设置克隆上的组合、预览、比例及独立显隐 |
 | TerminalWindow | 向窗口宿主提供编辑区域和消息事件 |
 | AppHost / EditorHostProbe | 每窗口一个原生 HWND / WebView2 controller、离线资源、来源检查、JSON 消息传输、原生焦点、弹层和释放 |
 | Monaco | 每文档一个 Model、视图位置、撤销历史、语言 worker，以及内置扩展命令 |
 
 桥接协议版本为 `1`。原生端发送 `open / activate / close / saved / error`；前端发送 `ready / changed / save`。关闭前使用 `flush / flushed / resume` 同步最新缓冲区并暂时冻结编辑，超时取消关闭。文档消息使用原生端分配的身份；网页没有按任意路径读写文件或执行 shell 命令的接口。消息来源必须完全匹配应用的虚拟 HTTPS 页面，且有类型和长度限制。资源映射仅指向随应用打包的编辑器目录。
 
-正常切换文档、工作区或临时隐藏编辑器都复用 Model。验证模式中，每个打开的文档标签都保留到显式关闭，修改后显示 `*`；这是为了避免文件树点击先于跨进程编辑消息到达时替换预览并丢失文字。默认只读预览模式仍保留临时预览标签行为。保存失败保留缓冲区；关闭文档、工作区或窗口时处理未保存内容。编辑器进程故障后可以重新加载，并恢复当前窗口原生端已收到的文字和未保存状态；此恢复会重置 Monaco 的撤销历史。应用进程退出后的文档恢复尚未实现。验证模式中的“退出所有窗口”暂时收敛为关闭当前窗口，避免跳过其他窗口的未保存提示；跨窗口退出协调仍待实现。
+正常切换文档、工作区或临时隐藏编辑器都复用 Model。每个打开的文档标签都保留到显式关闭，修改后显示 `*`；这避免快速点击文件树时跨进程编辑消息尚未到达便替换文档。保存失败保留缓冲区；关闭文档、工作区或窗口时先同步完整内容，再提供保存／放弃／取消。编辑器使用 Monaco 支持的 textarea 输入路径；原生宿主处理 `Ctrl+S` 并发送 `save-active`，沿用同一保存服务。编辑器进程故障可重试，恢复原生端已收到的文字和未保存状态；恢复会重置 Monaco 撤销历史。应用退出、崩溃或系统关机后的草稿恢复尚未实现。“退出所有窗口”逐个完成各窗口的确认，取消或保存失败时停止，已确认关闭的窗口不会重新打开。
 
 ## 文件与保存边界
 
 编辑验证面向不超过 2 MiB 的严格 UTF-8 和带 BOM 的 UTF-16 LE 文本，保留 BOM 和 LF／CRLF 换行。不支持的文本、二进制、混合／CR 换行及超限文件进入只读状态，没有截断内容回写路径。编辑缓冲区通信上限为 3 Mi 个 UTF-16 代码单元，超过后暂停同步和关闭，需缩减内容；保存后的文件仍须满足 2 MiB 字节上限。
 
-保存前重新比较原始磁盘字节，发现外部修改则拒绝覆盖并保留当前缓冲区。写入使用同目录临时文件和原子替换，替换前再次比对路径内容。这不是文件系统提供的原子比较并交换，其他程序恰在最终比对后替换路径的竞态仍存在。当前没有文件监听、自动合并、另存为或跨窗口共享文档服务；同一文件在其他窗口打开时，保存冲突检查仍是必要边界。
+保存前重新比较原始磁盘字节和文件身份，发现外部修改或同内容替换也拒绝覆盖并保留缓冲区。写入使用同目录临时文件和原子替换，替换前再次校验；保留原文件备份以处理替换失败，恢复失败会留下恢复文件并报告路径。这不是文件系统的原子比较并交换，其他程序恰在最终比对后替换路径的竞态仍存在。没有文件监听、自动合并、另存为或跨窗口共享缓冲；同一文件在其他窗口打开时仍检查保存冲突。
 
-文件读取和保存仍在 UI 线程，2 MiB 上限用于控制本次验证范围。每次内容变化向原生端发送完整文本；正式实现应改为异步文档服务及增量通信，并保留关闭前同步缓冲区的保证。
+文件读取、编码和保存在后台执行。保存确认对应所提交的文本与版本快照；期间继续编辑的内容仍保持未保存，下次保存使用更新后的磁盘基线。每次内容变化仍向原生端发送完整文本，增量通信留待后续优化。关闭会等待进行中的保存；同步超时、内容超限或服务失败会取消关闭。
 
 ## 扩展性判断
 
@@ -61,7 +62,24 @@ try {
 
 目前 Model URI 包含工作区、文档身份和文件名，没有完整源目录树；JSON、TypeScript、CSS 和 HTML worker 已打包，但跨文件 TypeScript import 解析和整个项目的语义服务尚未验证。
 
-## 验收
+## 当前验收（2026-10-03，可组合布局与默认编辑器）
+
+配置为 `x64 Debug`。本轮代码的开发包、TestHostApp 和 SettingsModel 测试项目已构建通过，最新版已通过 `DeployAppRecipe.exe` 部署。主程序、TerminalApp、设置模型、设置页面 DLL、资源 PRI 和新页面 XBF 均与 MSIX 内文件的 SHA256 一致。部署后再次验证了独立首页、布局设置入口及关闭设置返回首页，未改动开发包的用户配置。
+
+| 验证 | 结果 |
+| --- | --- |
+| 原生构建 | CascadiaPackage、TestHostApp 与 SettingsModel 测试项目通过；仍有既有资源与打包警告，无编译错误 |
+| 前端及真实浏览器（此前验证） | 19 项单测通过；真实 Monaco、JSON／TS／CSS／HTML worker、保存快照、关闭同步、模型与撤销状态通过；本轮未重复运行 |
+| 生产文档服务（此前验证） | `/W4 /WX` 通过；编码、BOM、换行、文件身份冲突、失败清理、保存期间继续编辑和过时回调保护通过；本轮未重复运行 |
+| 布局纯模型 | `/W4 /WX` 通过，覆盖全部 48 种三面板布局、1536 个几何／显隐组合、序列化、独立克隆及嵌套比例调整 |
+| 原生 TAEF | `*TabTests*` 102/102 通过，覆盖标题栏、布局、欢迎页、导航、焦点、文档状态及独立显隐 |
+| SettingsModel TAEF | 164/164 通过，包含布局对象持久化、非法布局拒绝、设置克隆、快捷方式序列化；英文资源断言使用进程级 en-US 测试上下文并恢复 |
+| 实际桌面 | Test-WorkspaceEditor.ps1 158/158 通过：实际预览拖放、嵌套组合、比例保存、分隔线拖动、设置保存／放弃更改、四区域快捷键、全隐藏后的恢复、Ctrl+S、跨文件／工作区 undo／redo、磁盘冲突和关闭确认；独立收尾验证 controller 释放与浏览器退出 |
+| 全新进程首页与重启 | 15/15 通过：无启动命令时首页全宽、不自动创建终端，从首页进入／关闭设置后回到首页且移除临时工作区，重启后设置预览恢复已保存的嵌套布局 |
+
+桌面测试在独立便携副本与全新临时目录中运行，未修改开发包的用户设置或实际项目。自动化键盘按下和释放之间保留 80 ms，焦点同时核对 `Edit` 类型、键盘焦点和 HWND 归属；输入后等待原生未保存标记，再验证保存／关闭。当前证据为本地 `build/webview-editor-layout-*`，测试目录和专用配置记录在 `build/webview-editor-layout-fixture.json`，首页／重启补测记录在 `build/webview-editor-layout-home-test.log` 和 `build/webview-editor-layout-home-fixture.json`；此前默认编辑器的前端及文档服务证据保留在 `build/webview-editor-current-*`。中文输入法候选框、跨屏 DPI、系统关机恢复与长期资源占用仍未完成验收。
+
+## 历史验证（2026-10-02，可选编辑器）
 
 2026-10-02，`x64 Debug`、WebView2 Runtime `154.0.4258.53` 下完成以下验收。人工验收还需覆盖中文输入法候选框、跨屏 DPI、全屏／专注模式、右键／剪贴板，以及长时间资源占用。
 
@@ -90,12 +108,20 @@ cl /std:c++20 /EHsc /utf-8 /W4 /Fe:build\WorkspaceEditorBufferTests.exe /Fo:buil
 & .\build\WorkspaceEditorBufferTests.exe
 ```
 
-桌面验收使用上面启动的专用测试窗口。脚本创建全新的临时目录和样例文件，保留诊断证据；`-Close` 会关闭该测试窗口，不要在其中运行实际任务。
+完整桌面验收使用独立便携副本及其全新测试配置，设置 `tabPosition: left` 并使用不运行实际任务的 shell profile。专用配置的 `actions` 与 `keybindings` 需要以下绑定；这些键只属于测试配置：
+
+| 测试键 | 命令 |
+| --- | --- |
+| Ctrl+Alt+F9 | `toggleWorkspaceFiles` |
+| Ctrl+Alt+F10 | `toggleWorkspaceTerminal` |
+| Ctrl+Alt+F11 | `toggleWorkspaceEditor` |
+| Ctrl+Alt+F12 | `toggleWorkspaceTabs` |
+| Ctrl+Alt+L | `openWorkspaceLayout` |
+| Ctrl+Alt+Backspace | `closeTab` |
+
+启动该副本后，将其 PID、该进程生成的 `probe.log` 和便携副本的 `settings/settings.json` 路径分别赋给 `$testProcessId`、`$testProbeLog`、`$testSettingsPath`。脚本会通过设置 UI 修改该专用配置，因此 `SettingsPath` 必须指向测试副本。脚本创建全新的临时目录和样例文件，保留诊断证据；`-Close` 关闭专用测试窗口。
 
 ```powershell
-$probe = Get-Process WindowsTerminal | Where-Object MainWindowTitle -eq 'WebViewEditorValidation'
-$log = Get-ChildItem "$env:LOCALAPPDATA\Packages\WindowsTerminalDev_8wekyb3d8bbwe\LocalCache\Sansterminal\EditorHostProbe" -Recurse -Filter probe.log |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $fixture = Join-Path $env:TEMP ("sansterminal-editor-ui-" + [guid]::NewGuid())
-.\tools\Test-WorkspaceEditor.ps1 -ProbeProcessId $probe.Id -LogPath $log.FullName -WorkspacePath $fixture -Close
+.\tools\Test-WorkspaceEditor.ps1 -ProbeProcessId $testProcessId -LogPath $testProbeLog -SettingsPath $testSettingsPath -WorkspacePath $fixture -Close
 ```

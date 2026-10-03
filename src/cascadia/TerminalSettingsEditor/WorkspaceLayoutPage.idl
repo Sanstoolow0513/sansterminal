@@ -1,0 +1,11 @@
+// Copyright (c) Sansterminal contributors.
+// Licensed under the MIT license.
+
+namespace Microsoft.Terminal.Settings.Editor
+{
+    runtimeclass WorkspaceLayoutPage : Windows.UI.Xaml.Controls.Page
+    {
+        WorkspaceLayoutPage();
+        Microsoft.Terminal.Settings.Model.GlobalAppSettings GlobalSettings { get; };
+    }
+}
