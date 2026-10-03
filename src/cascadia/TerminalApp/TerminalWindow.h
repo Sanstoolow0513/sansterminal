@@ -96,6 +96,7 @@ namespace winrt::TerminalApp::implementation
         bool AutoHideWindow();
         void IdentifyWindow();
         bool FocusTab(const winrt::TerminalApp::Tab& tab);
+        void FocusActiveTerminal();
 
         std::optional<uint32_t> LoadPersistedLayoutIdx() const;
         winrt::Microsoft::Terminal::Settings::Model::WindowLayout LoadPersistedLayout();
@@ -126,8 +127,6 @@ namespace winrt::TerminalApp::implementation
 
         winrt::TerminalApp::TaskbarState TaskbarState();
         winrt::Windows::UI::Xaml::Media::Brush TitlebarBrush();
-        bool TitlebarOverlayMode();
-        double TitlebarOverlayLeftInset();
         winrt::Windows::UI::Xaml::Media::Brush FrameBrush();
         void WindowActivated(const bool activated);
 
@@ -219,6 +218,7 @@ namespace winrt::TerminalApp::implementation
         FORWARDED_TYPED_EVENT(SetTitleBarContent, winrt::Windows::Foundation::IInspectable, winrt::Windows::UI::Xaml::UIElement, _root, SetTitleBarContent);
         FORWARDED_TYPED_EVENT(TitleChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, TitleChanged);
         FORWARDED_TYPED_EVENT(CloseWindowRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, CloseWindowRequested);
+        til::typed_event<winrt::Windows::Foundation::IInspectable, bool> DialogVisibilityChanged;
         FORWARDED_TYPED_EVENT(FocusModeChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FocusModeChanged);
         FORWARDED_TYPED_EVENT(FullscreenChanged, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, FullscreenChanged);
         FORWARDED_TYPED_EVENT(ChangeMaximizeRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable, _root, ChangeMaximizeRequested);

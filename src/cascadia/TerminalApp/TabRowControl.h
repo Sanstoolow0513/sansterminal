@@ -19,8 +19,7 @@ namespace winrt::TerminalApp::implementation
         void OnNewTabButtonDrop(const winrt::Windows::Foundation::IInspectable& sender, const winrt::Windows::UI::Xaml::DragEventArgs& e);
         void OnNewTabButtonDragOver(const winrt::Windows::Foundation::IInspectable& sender, const winrt::Windows::UI::Xaml::DragEventArgs& e);
 
-        // x:Bind helpers. The horizontal strip shows the raw window name (hidden
-        // when unnamed). The sidebar footer always shows SidebarWorkspaceLabel.
+        // x:Bind helpers for the workspace label in horizontal and side tabs.
         winrt::Windows::UI::Xaml::Visibility SidebarVisibility(bool isVertical);
         winrt::Windows::UI::Xaml::Visibility HorizontalWorkspaceNameVisibility(bool isVertical, winrt::hstring name);
 

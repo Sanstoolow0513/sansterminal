@@ -35,7 +35,9 @@ namespace winrt::TerminalApp::implementation
         std::shared_ptr<Pane> DetachPane();
         void AttachPane(std::shared_ptr<Pane> pane);
 
-        void AttachColorPicker(winrt::TerminalApp::ColorPickupFlyout& colorPicker);
+        void AttachColorPicker(winrt::TerminalApp::ColorPickupFlyout& colorPicker, const winrt::Windows::UI::Xaml::FrameworkElement& target);
+        void SetNavigationRow(const winrt::Windows::UI::Xaml::Controls::Grid& row, const winrt::Windows::UI::Xaml::Controls::Button& closeButton);
+        void SetNavigationRowSelected(bool selected);
 
         std::pair<std::shared_ptr<Pane>, std::shared_ptr<Pane>> SplitPane(winrt::Microsoft::Terminal::Settings::Model::SplitDirection splitType,
                                                                           const float splitSize,
@@ -144,7 +146,6 @@ namespace winrt::TerminalApp::implementation
         winrt::Windows::UI::Xaml::FocusState _focusState{ winrt::Windows::UI::Xaml::FocusState::Unfocused };
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _duplicateTabMenuItem{};
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _splitTabMenuItem{};
-        winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _moveToNewWindowMenuItem{};
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _moveRightMenuItem{};
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _moveLeftMenuItem{};
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _exportTabMenuItem{};
@@ -172,6 +173,10 @@ namespace winrt::TerminalApp::implementation
         std::optional<winrt::Windows::UI::Color> _runtimeTabColor{};
         winrt::TerminalApp::TabHeaderControl _headerControl{};
         winrt::TerminalApp::TerminalTabStatus _tabStatus{};
+        winrt::weak_ref<winrt::Windows::UI::Xaml::Controls::Grid> _navigationRow;
+        winrt::weak_ref<winrt::Windows::UI::Xaml::Controls::Button> _navigationCloseButton;
+        bool _navigationRowHovered{ false };
+        bool _navigationRowSelected{ false };
 
         winrt::TerminalApp::ColorPickupFlyout _tabColorPickup{ nullptr };
         winrt::event_token _colorSelectedToken;
@@ -251,6 +256,10 @@ namespace winrt::TerminalApp::implementation
         void _ApplyTabColorOnUIThread(const winrt::Windows::UI::Color& color);
         void _ClearTabBackgroundColor();
         void _RefreshVisualState();
+        void _UpdateNavigationRowColor();
+        void _UpdateNavigationCloseButton();
+        void _NavigationRowPointerEntered(const IInspectable& sender, const winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _NavigationRowPointerExited(const IInspectable& sender, const winrt::Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
 
         bool _focused() const noexcept;
         void _updateIsClosable();

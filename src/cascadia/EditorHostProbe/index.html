@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monaco host probe</title>
+<link rel="stylesheet" href="editor.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; color: #eee; font: 13px system-ui; }
+  body { display: flex; flex-direction: column; }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
+  button { color: inherit; background: #333; border: 1px solid #666; border-radius: 3px; padding: 5px 9px; }
+  button[aria-pressed="true"] { border-color: #87bfff; }
+  #editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  #status { padding: 6px 10px; overflow-wrap: anywhere; }
+</style>
+<nav aria-label="测试文档">
+  <button id="json">项目 A / JSON</button>
+  <button id="typescript">项目 B / TypeScript</button>
+  <button id="check">运行自检</button>
+  <button id="dialog">XAML 对话框</button>
+  <button id="terminal">终端（F6）</button>
+</nav>
+<div id="editor"></div>
+<output id="status" aria-live="polite">正在加载离线编辑器。这里的修改仅保留在测试缓冲区。</output>
+<script type="module" src="editor.js"></script>
+</html>

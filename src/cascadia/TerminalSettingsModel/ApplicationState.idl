@@ -40,6 +40,9 @@ namespace Microsoft.Terminal.Settings.Model
         Boolean RenameWorkspace(String oldName, String newName);
         WindowLayout TakeWorkspace(String name);
         Windows.Foundation.Collections.IMapView<String, WindowLayout> AllPersistedWorkspaces();
+        void RecordRecentWorkspace(String name);
+        Boolean ForgetRecentWorkspace(String name);
+        Windows.Foundation.Collections.IVectorView<String> AllRecentWorkspaces();
 
         String SettingsHash;
         Windows.Foundation.Collections.IVector<WindowLayout> PersistedWindowLayouts;

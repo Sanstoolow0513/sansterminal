@@ -814,9 +814,10 @@ namespace winrt::TerminalApp::implementation
     // - Typically will be called after we have sent a request for the color picker
     // Arguments:
     // - colorPicker: The color picker that we should attach to ourselves
+    // - target: The visible tab or workspace navigation row to anchor it to
     // Return Value:
     // - <none>
-    void Tab::AttachColorPicker(TerminalApp::ColorPickupFlyout& colorPicker)
+    void Tab::AttachColorPicker(TerminalApp::ColorPickupFlyout& colorPicker, const FrameworkElement& target)
     {
         ASSERT_UI_THREAD();
 
@@ -848,7 +849,107 @@ namespace winrt::TerminalApp::implementation
             }
         });
 
-        _tabColorPickup.ShowAt(TabViewItem());
+        _tabColorPickup.ShowAt(target);
+    }
+
+    void Tab::SetNavigationRow(const Controls::Grid& row, const Controls::Button& closeButton)
+    {
+        ASSERT_UI_THREAD();
+
+        _navigationRow = winrt::make_weak(row);
+        _navigationCloseButton = winrt::make_weak(closeButton);
+        row.PointerEntered({ get_weak(), &Tab::_NavigationRowPointerEntered });
+        row.PointerExited({ get_weak(), &Tab::_NavigationRowPointerExited });
+        _UpdateNavigationCloseButton();
+        _UpdateNavigationRowColor();
+    }
+
+    void Tab::_NavigationRowPointerEntered(const IInspectable&, const Input::PointerRoutedEventArgs&)
+    {
+        _navigationRowHovered = true;
+        _UpdateNavigationCloseButton();
+    }
+
+    void Tab::_NavigationRowPointerExited(const IInspectable&, const Input::PointerRoutedEventArgs&)
+    {
+        _navigationRowHovered = false;
+        _UpdateNavigationCloseButton();
+    }
+
+    void Tab::_UpdateNavigationCloseButton()
+    {
+        if (const auto button = _navigationCloseButton.get())
+        {
+            const bool visible = TabViewItem().IsClosable() &&
+                                 (_closeButtonVisibility != TabCloseButtonVisibility::Hover || _navigationRowHovered);
+            button.Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
+        }
+    }
+
+    void Tab::SetNavigationRowSelected(bool selected)
+    {
+        ASSERT_UI_THREAD();
+
+        if (_navigationRowSelected != selected)
+        {
+            _navigationRowSelected = selected;
+            _UpdateNavigationRowColor();
+        }
+    }
+
+    void Tab::_UpdateNavigationRowColor()
+    {
+        if (const auto row = _navigationRow.get())
+        {
+            const auto applyForeground = [&](const Media::Brush& brush) {
+                const auto apply = [&](const Controls::Control& control) {
+                    if (brush)
+                    {
+                        control.Foreground(brush);
+                    }
+                    else
+                    {
+                        control.ClearValue(Controls::Control::ForegroundProperty());
+                    }
+                };
+                apply(_headerControl);
+                for (const auto& child : row.Children())
+                {
+                    if (const auto control = child.try_as<Controls::Control>())
+                    {
+                        apply(control);
+                    }
+                }
+            };
+            const auto themes = TabViewItem().Resources().ThemeDictionaries();
+            const auto lightKey = box_value(L"Light");
+            const auto backgroundKey = box_value(L"TabViewItemHeaderBackgroundSelected");
+            const auto foregroundKey = box_value(_navigationRowSelected ? L"TabViewItemHeaderForegroundSelected" : L"TabViewItemHeaderForeground");
+            row.Resources().ThemeDictionaries().Clear();
+            if (themes.HasKey(lightKey))
+            {
+                const auto colors = themes.Lookup(lightKey).as<ResourceDictionary>();
+                if (colors.HasKey(backgroundKey) && colors.HasKey(foregroundKey))
+                {
+                    for (const auto& [key, value] : themes)
+                    {
+                        // Each resource dictionary has a single parent. Share
+                        // its brushes through a separately owned dictionary.
+                        ResourceDictionary rowColors{};
+                        for (const auto& [colorKey, colorValue] : value.as<ResourceDictionary>())
+                        {
+                            rowColors.Insert(colorKey, colorValue);
+                        }
+                        row.Resources().ThemeDictionaries().Insert(key, rowColors);
+                    }
+                    row.Background(_navigationRowSelected ? colors.Lookup(backgroundKey).as<Media::Brush>() : TabViewItem().Background());
+                    applyForeground(colors.Lookup(foregroundKey).as<Media::Brush>());
+                    return;
+                }
+            }
+            row.Background(Media::SolidColorBrush{ Windows::UI::Colors::Transparent() });
+            applyForeground(nullptr);
+        }
     }
 
     // Method Description:
@@ -1540,28 +1641,6 @@ namespace winrt::TerminalApp::implementation
     {
         auto weakThis{ get_weak() };
 
-        // Move to new window
-        {
-            Controls::FontIcon moveTabToNewWindowTabSymbol;
-            moveTabToNewWindowTabSymbol.FontFamily(Media::FontFamily{ L"Segoe Fluent Icons, Segoe MDL2 Assets" });
-            moveTabToNewWindowTabSymbol.Glyph(L"\xE8A7");
-
-            _moveToNewWindowMenuItem.Click([weakThis](auto&&, auto&&) {
-                if (auto tab{ weakThis.get() })
-                {
-                    MoveTabArgs args{ L"new", MoveTabDirection::Forward };
-                    ActionAndArgs actionAndArgs{ ShortcutAction::MoveTab, args };
-                    tab->_dispatch.DoAction(*tab, actionAndArgs);
-                }
-            });
-            _moveToNewWindowMenuItem.Text(RS_(L"MoveTabToNewWindowText"));
-            _moveToNewWindowMenuItem.Icon(moveTabToNewWindowTabSymbol);
-
-            const auto moveTabToNewWindowToolTip = RS_(L"MoveTabToNewWindowToolTip");
-            WUX::Controls::ToolTipService::SetToolTip(_moveToNewWindowMenuItem, box_value(moveTabToNewWindowToolTip));
-            Automation::AutomationProperties::SetHelpText(_moveToNewWindowMenuItem, moveTabToNewWindowToolTip);
-        }
-
         // Move left
         {
             _moveLeftMenuItem.Click([weakThis](auto&&, auto&&) {
@@ -1591,7 +1670,6 @@ namespace winrt::TerminalApp::implementation
         // Create a sub-menu for our extended move tab items.
         Controls::MenuFlyoutSubItem moveSubMenu;
         moveSubMenu.Text(RS_(L"TabMoveSubMenu"));
-        moveSubMenu.Items().Append(_moveToNewWindowMenuItem);
         moveSubMenu.Items().Append(_moveRightMenuItem);
         moveSubMenu.Items().Append(_moveLeftMenuItem);
         flyout.Items().Append(moveSubMenu);
@@ -2628,6 +2706,7 @@ namespace winrt::TerminalApp::implementation
             VisualStateManager::GoToState(item, L"Selected", true);
             VisualStateManager::GoToState(item, L"Normal", true);
         }
+        _UpdateNavigationRowColor();
     }
 
     TabCloseButtonVisibility Tab::CloseButtonVisibility()
@@ -2681,6 +2760,7 @@ namespace winrt::TerminalApp::implementation
             }
         }
         TabViewItem().IsClosable(isClosable);
+        _UpdateNavigationCloseButton();
     }
 
     bool Tab::_focused() const noexcept

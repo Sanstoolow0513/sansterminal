@@ -280,9 +280,17 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            const auto& duplicateFromTab{ realArgs.SplitMode() == SplitType::Duplicate ? _GetFocusedTab() : nullptr };
-
             const auto& activeTab{ _senderOrFocusedTab(sender) };
+            if (!activeTab)
+            {
+                // An empty workspace promotes the split to a new tab. Apply
+                // its launch defaults before constructing the connection.
+                LOG_IF_FAILED(_OpenNewTab(realArgs.ContentArgs()));
+                args.Handled(true);
+                return;
+            }
+
+            const auto& duplicateFromTab{ realArgs.SplitMode() == SplitType::Duplicate ? _GetFocusedTab() : nullptr };
 
             _SplitPane(activeTab,
                        realArgs.SplitDirection(),
@@ -708,14 +716,55 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto activeTab{ _senderOrFocusedTab(sender) })
         {
-            if (!_tabColorPicker)
-            {
-                _tabColorPicker = winrt::make<ColorPickupFlyout>();
-            }
-
-            activeTab->AttachColorPicker(_tabColorPicker);
+            _ShowTabColorPicker(*activeTab);
         }
         args.Handled(true);
+    }
+
+    safe_void_coroutine TerminalPage::_ShowTabColorPicker(winrt::TerminalApp::Tab tab)
+    {
+        const auto weakThis = get_weak();
+        if (_tabPosition == TabPosition::Left)
+        {
+            if (const auto workspace = _FindWorkspace(_WorkspaceForTab(tab)))
+            {
+                workspace->navigationNode.IsExpanded(true);
+            }
+            // TreeView updates its containers asynchronously after expansion.
+            co_await wil::resume_foreground(Dispatcher());
+        }
+        if (const auto page = weakThis.get())
+        {
+            uint32_t index{};
+            if (!page->_tabs.IndexOf(tab, index))
+            {
+                co_return;
+            }
+            FrameworkElement target = tab.TabViewItem();
+            if (page->_tabPosition == TabPosition::Left)
+            {
+                page->_SyncWorkspaceNavigationSelection();
+                page->WorkspaceNavigation().UpdateLayout();
+                // Keep a visible anchor even if the tab is outside the viewport.
+                target = page->WorkspaceNavigation();
+                for (const auto& entry : page->_workspaceNavigationEntries)
+                {
+                    if (entry.tab == tab)
+                    {
+                        if (const auto item = page->WorkspaceNavigation().ContainerFromNode(entry.node).try_as<FrameworkElement>())
+                        {
+                            target = item;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!page->_tabColorPicker)
+            {
+                page->_tabColorPicker = winrt::make<ColorPickupFlyout>();
+            }
+            page->_GetTabImpl(tab)->AttachColorPicker(page->_tabColorPicker, target);
+        }
     }
 
     void TerminalPage::_HandleRenameTab(const IInspectable& sender,
@@ -787,16 +836,22 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            // Since _RemoveTabs is asynchronous, create a snapshot of the  tabs we want to remove
-            std::vector<winrt::TerminalApp::Tab> tabsToRemove;
-            if (index > 0)
+            if (index >= _tabs.Size())
             {
-                std::copy(begin(_tabs), begin(_tabs) + index, std::back_inserter(tabsToRemove));
+                actionArgs.Handled(false);
+                return;
             }
 
-            if (index + 1 < _tabs.Size())
+            // Snapshot only the target tab's workspace before asynchronous removal.
+            const auto target = _tabs.GetAt(index);
+            const auto workspaceId = _WorkspaceForTab(target);
+            std::vector<winrt::TerminalApp::Tab> tabsToRemove;
+            for (const auto& tab : _tabs)
             {
-                std::copy(begin(_tabs) + index + 1, end(_tabs), std::back_inserter(tabsToRemove));
+                if (tab != target && _WorkspaceForTab(tab) == workspaceId)
+                {
+                    tabsToRemove.push_back(tab);
+                }
             }
 
             _RemoveTabs(tabsToRemove);
@@ -826,9 +881,23 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            // Since _RemoveTabs is asynchronous, create a snapshot of the  tabs we want to remove
+            if (index >= _tabs.Size())
+            {
+                actionArgs.Handled(false);
+                return;
+            }
+
+            // Global tab order can interleave several workspaces.
+            const auto workspaceId = _WorkspaceForTab(_tabs.GetAt(index));
             std::vector<winrt::TerminalApp::Tab> tabsToRemove;
-            std::copy(begin(_tabs) + index + 1, end(_tabs), std::back_inserter(tabsToRemove));
+            for (auto i = index + 1; i < _tabs.Size(); ++i)
+            {
+                const auto tab = _tabs.GetAt(i);
+                if (_WorkspaceForTab(tab) == workspaceId)
+                {
+                    tabsToRemove.push_back(tab);
+                }
+            }
             _RemoveTabs(tabsToRemove);
 
             // TODO:GH#7182 For whatever reason, if you run this action
@@ -893,16 +962,6 @@ namespace winrt::TerminalApp::implementation
         winrt::TerminalApp::WindowRequestedArgs request{ 0, winrt::TerminalApp::CommandlineArgs{} };
         request.StartupActions(std::move(actions));
         RequestNewWindow.raise(*this, request);
-    }
-
-    // Ask the WindowEmperor (in-process) to open or summon a named window,
-    // restoring its persisted workspace if one exists. The event bubbles up
-    // through TerminalWindow to AppHost, which calls into the WindowEmperor
-    // directly. No second wt.exe process is launched.
-    void TerminalPage::_OpenWorkspaceWindow(const winrt::hstring name)
-    {
-        const auto args = winrt::make<implementation::OpenWindowRequestedArgs>(name);
-        RequestOpenWindow.raise(*this, args);
     }
 
     void TerminalPage::_HandleNewWindow(const IInspectable& /*sender*/,
@@ -1608,9 +1667,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleOpenWorkspace(const IInspectable& /*sender*/,
                                             const ActionEventArgs& args)
     {
-        // Open (or summon) a named window.  We launch a new `wt -w <name>`
-        // process which the monarch will route to the correct live window or
-        // restore from a persisted workspace.
+        // A named action opens a workspace; a bare action opens the workspace page.
         if (args)
         {
             if (const auto& realArgs = args.ActionArgs().try_as<OpenWorkspaceArgs>())
@@ -1618,7 +1675,11 @@ namespace winrt::TerminalApp::implementation
                 const auto name = realArgs.Name();
                 if (!name.empty())
                 {
-                    _OpenWorkspaceWindow(name);
+                    _OpenWorkspace(name);
+                }
+                else
+                {
+                    _ShowWorkspaceHub();
                 }
                 args.Handled(true);
             }
@@ -1628,10 +1689,7 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_HandleWorkspaces(const IInspectable& /*sender*/,
                                          const ActionEventArgs& args)
     {
-        if (_workspaceFlyout && _workspaceDropdown)
-        {
-            _workspaceFlyout.ShowAt(_workspaceDropdown);
-        }
+        _ShowWorkspaceHub();
         args.Handled(true);
     }
 

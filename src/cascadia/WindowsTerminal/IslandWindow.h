@@ -26,6 +26,7 @@ public:
 
     virtual void OnSize(const UINT width, const UINT height);
     HWND GetInteropHandle() const;
+    void FocusContent();
 
     [[nodiscard]] virtual LRESULT MessageHandler(UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept;
 

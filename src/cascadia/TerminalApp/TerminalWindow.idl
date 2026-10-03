@@ -79,6 +79,7 @@ namespace TerminalApp
 
         void IdentifyWindow();
         Boolean FocusTab(TerminalApp.Tab tab);
+        void FocusActiveTerminal();
         void SetPersistedLayoutIdx(UInt32 idx);
         void RequestExitFullscreen();
 
@@ -98,8 +99,6 @@ namespace TerminalApp
 
         TaskbarState TaskbarState{ get; };
         Windows.UI.Xaml.Media.Brush TitlebarBrush { get; };
-        Boolean TitlebarOverlayMode { get; };
-        Double TitlebarOverlayLeftInset { get; };
         Windows.UI.Xaml.Media.Brush FrameBrush { get; };
         Microsoft.Terminal.Settings.Model.Theme Theme { get; };
         void WindowActivated(Boolean activated);
@@ -124,6 +123,7 @@ namespace TerminalApp
         event Windows.Foundation.TypedEventHandler<Object, Windows.UI.Xaml.UIElement> SetTitleBarContent;
         event Windows.Foundation.TypedEventHandler<Object, Object> TitleChanged;
         event Windows.Foundation.TypedEventHandler<Object, Object> CloseWindowRequested;
+        event Windows.Foundation.TypedEventHandler<Object, Boolean> DialogVisibilityChanged;
         event Windows.Foundation.TypedEventHandler<Object, Microsoft.Terminal.Settings.Model.Theme> RequestedThemeChanged;
         event Windows.Foundation.TypedEventHandler<Object, Object> FocusModeChanged;
         event Windows.Foundation.TypedEventHandler<Object, Object> FullscreenChanged;

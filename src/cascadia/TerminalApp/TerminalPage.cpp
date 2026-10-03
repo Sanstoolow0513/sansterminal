@@ -24,6 +24,8 @@
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
 
+#include <fstream>
+
 #include "LaunchPositionRequest.g.cpp"
 #include "WindowListEntry.g.cpp"
 #include "WindowListRequest.g.cpp"
@@ -350,63 +352,48 @@ namespace winrt::TerminalApp::implementation
         const auto canDragDrop = CanDragDrop();
 
         _tabView.CanReorderTabs(canDragDrop);
+        // TabDragStarting/Completed keep the tab model in sync with WinUI
+        // reordering. Tear-out is disabled separately by omitting its handlers.
         _tabView.CanDragTabs(canDragDrop);
         _tabView.TabDragStarting({ get_weak(), &TerminalPage::_TabDragStarted });
         _tabView.TabDragCompleted({ get_weak(), &TerminalPage::_TabDragCompleted });
 
         auto tabRowImpl = winrt::get_self<implementation::TabRowControl>(_tabRow);
         _newTabButton = tabRowImpl->NewTabButton();
-        _workspaceFlyout = tabRowImpl->WorkspaceFlyout();
-        _workspaceDropdown = tabRowImpl->WorkspaceDropdown();
-
-        // Horizontal tabs show the raw window name (blank when unnamed).
-        // The sidebar footer always has a caption, including "#id (unnamed)".
-        _UpdateWorkspaceLabels();
-
-        // Rebuild the workspace flyout each time it opens so it always
-        // reflects the latest set of persisted workspaces.
-        _workspaceFlyout.Opening([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_PopulateWorkspaceFlyout();
-            }
-        });
+        _workspaceHomeButton = tabRowImpl->WorkspaceHomeButton();
+        _workspaceHomeButton.Click({ this, &TerminalPage::_WorkspaceHomeClick });
 
         _tabPosition = _currentWindowSettings().TabPosition();
 
         if (_tabPosition == Settings::Model::TabPosition::Left)
         {
-            // Side tabs live in a dedicated, resizable column. The terminal
-            // occupies the remaining column and never sits behind the tabs.
-            uint32_t index = 0;
-            if (this->Root().Children().IndexOf(_tabRow, index))
-            {
-                this->Root().Children().RemoveAt(index);
-            }
-
-            _tabRow.HorizontalAlignment(WUX::HorizontalAlignment::Stretch);
-            _tabRow.VerticalAlignment(WUX::VerticalAlignment::Stretch);
-            SideTabPanel().Child(_tabRow);
-
+            // Keep the TabView as the ordered terminal selection model. The
+            // sidebar presents those same tabs grouped by their workspace.
             tabRowImpl->SetVertical(true);
-
-            // Ask the host window to float the caption buttons over the
-            // content instead of reserving a titlebar row (see
-            // NonClientIslandWindow::SetTitlebarOverlayMode). Ignored by hosts
-            // without a non-client island.
-            TitlebarOverlayMode(true);
-
+            _tabRow.Visibility(Visibility::Collapsed);
+            uint32_t index{};
+            const auto newTabHost = tabRowImpl->NewTabButtonHost();
+            if (tabRowImpl->HeaderChrome().Children().IndexOf(newTabHost, index))
+            {
+                tabRowImpl->HeaderChrome().Children().RemoveAt(index);
+            }
+            WorkspaceNewTabHost().Content(newTabHost);
+            const auto shield = tabRowImpl->ElevationShieldIcon();
+            if (tabRowImpl->HeaderChrome().Children().IndexOf(shield, index))
+            {
+                tabRowImpl->HeaderChrome().Children().RemoveAt(index);
+            }
+            shield.Margin(ThicknessHelper::FromLengths(0, 0, 8, 0));
+            WorkspaceHeader().Children().InsertAt(1, shield);
+            _workspaceHomeButton = WorkspaceHeaderHome();
+            WorkspaceHeader().Visibility(Visibility::Visible);
             if (_currentWindowSettings().ShowTabsInTitlebar())
             {
-                // Keep notifications below the floating chrome without giving
-                // the page a 48-DIP layout row. A margin on the original Auto
-                // row pushed the terminal down and looked like a leftover
-                // native titlebar. Put the container over the content instead.
-                const auto infoBarContainer = InfoBarContainer();
-                WUX::Controls::Grid::SetRow(infoBarContainer, 2);
-                WUX::Controls::Canvas::SetZIndex(infoBarContainer, 2);
-                infoBarContainer.VerticalAlignment(WUX::VerticalAlignment::Top);
-                infoBarContainer.Margin(WUX::ThicknessHelper::FromLengths(0, 48, 0, 0));
+                if (Root().Children().IndexOf(WorkspaceHeader(), index))
+                {
+                    Root().Children().RemoveAt(index);
+                }
+                SetTitleBarContent.raise(*this, WorkspaceHeader());
             }
 
             // Left mode starts expanded; the compact toggle can collapse the
@@ -495,11 +482,6 @@ namespace winrt::TerminalApp::implementation
         _tabView.TabCloseRequested({ this, &TerminalPage::_OnTabCloseRequested });
         _tabView.TabItemsChanged({ this, &TerminalPage::_OnTabItemsChanged });
 
-        _tabView.TabDragStarting({ this, &TerminalPage::_onTabDragStarting });
-        _tabView.TabStripDragOver({ this, &TerminalPage::_onTabStripDragOver });
-        _tabView.TabStripDrop({ this, &TerminalPage::_onTabStripDrop });
-        _tabView.TabDroppedOutside({ this, &TerminalPage::_onTabDroppedOutside });
-
         _CreateNewTabFlyout();
 
         _UpdateTabWidthMode();
@@ -529,6 +511,18 @@ namespace winrt::TerminalApp::implementation
         if (const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings()))
         {
             _tabRow.ShowWorkspacesButton(theme.Window() ? theme.Window().ShowWorkspacesButton() : true);
+        }
+
+        // The host can still supply a legacy named layout. Otherwise wait on
+        // the welcome page until a workspace is chosen or restored.
+        if (const auto initialName = _WindowProperties.WindowName(); !initialName.empty())
+        {
+            _SwitchWorkspace(initialName, false);
+        }
+        else
+        {
+            _UpdateWorkspaceLabels();
+            _ShowWorkspaceHub();
         }
 
     }
@@ -749,7 +743,7 @@ namespace winrt::TerminalApp::implementation
             }
             else if (!_startupActions.empty())
             {
-                ProcessStartupActions(std::move(_startupActions));
+                ProcessStartupActions(std::move(_startupActions), {}, {}, _startupActionsRestoreLayout);
             }
 
             _CompleteInitialization();
@@ -768,9 +762,11 @@ namespace winrt::TerminalApp::implementation
     // - cwd: If not empty, we should try switching to this provided directory
     //   while processing these actions. This will allow something like `wt -w 0
     //   nt -d .` from inside another directory to work as expected.
+    // - restoreLayout: append restored tabs in serialized order, including
+    //   older layouts without workspace markers.
     // Return Value:
     // - <none>
-    safe_void_coroutine TerminalPage::ProcessStartupActions(std::vector<ActionAndArgs> actions, const winrt::hstring cwd, const winrt::hstring env)
+    safe_void_coroutine TerminalPage::ProcessStartupActions(std::vector<ActionAndArgs> actions, const winrt::hstring cwd, const winrt::hstring env, const bool restoreLayout)
     {
         const auto strong = get_strong();
 
@@ -810,6 +806,15 @@ namespace winrt::TerminalApp::implementation
         //
         // See GH#13136.
         auto suspend = _tabs.Size() > 0;
+        // A persisted layout uses openWorkspace actions as group markers. A
+        // one-action layout is the older stub that asks us to load a saved
+        // workspace, so it must still go through the normal action handler.
+        const bool hasWorkspaceMarkers = actions.size() > 1 &&
+                                         std::any_of(actions.begin(), actions.end(), [](const auto& action) {
+                                             return action.Action() == ShortcutAction::OpenWorkspace;
+                                         });
+        const bool restoringLayout = restoreLayout || hasWorkspaceMarkers;
+        auto replayWorkspaceId = _activeWorkspaceId.empty() ? winrt::hstring{ L"__untitled_workspace__" } : _activeWorkspaceId;
 
         for (size_t i = 0; i < actions.size(); ++i)
         {
@@ -818,20 +823,44 @@ namespace winrt::TerminalApp::implementation
                 co_await wil::resume_foreground(Dispatcher(), CoreDispatcherPriority::Low);
             }
 
-            _actionDispatch->DoAction(actions[i]);
-            suspend = true;
+            // Scope the insertion policy to each dispatched action. Interactive
+            // commands can run while layout replay yields to the dispatcher.
+            const auto wasRestoringLayout = std::exchange(_restoringLayout, restoringLayout);
+            const auto restoreInsertionPolicy = wil::scope_exit([&]() noexcept { _restoringLayout = wasRestoringLayout; });
+
+            if (hasWorkspaceMarkers && actions[i].Action() == ShortcutAction::OpenWorkspace)
+            {
+                if (const auto marker = actions[i].Args().try_as<OpenWorkspaceArgs>())
+                {
+                    if (!marker.Name().empty())
+                    {
+                        replayWorkspaceId = marker.Name();
+                        _SwitchWorkspace(replayWorkspaceId, false);
+                    }
+                }
+            }
+            else
+            {
+                // Activation can change while we yield. Tab and pane actions
+                // must run in their serialized workspace. Final selection and
+                // window actions must preserve the workspace of the saved tab.
+                const auto action = actions[i].Action();
+                if (restoringLayout && action != ShortcutAction::SwitchToTab && action != ShortcutAction::RenameWindow &&
+                    _activeWorkspaceId != replayWorkspaceId)
+                {
+                    _SwitchWorkspace(replayWorkspaceId, false);
+                }
+                _actionDispatch->DoAction(actions[i]);
+            }
+            // Workspace markers do not create a tab. The first real tab must
+            // still be created synchronously during startup.
+            suspend = _tabs.Size() > 0;
         }
 
         // GH#6586: now that we're done processing all startup commands,
         // focus the active control. This will work as expected for both
         // commandline invocations and for `wt` action invocations.
-        if (const auto& tabImpl{ _GetFocusedTabImpl() })
-        {
-            if (const auto& content{ tabImpl->GetActiveContent() })
-            {
-                content.Focus(FocusState::Programmatic);
-            }
-        }
+        _FocusCurrentTab(true);
     }
 
     safe_void_coroutine TerminalPage::CreateTabFromConnection(ITerminalConnection connection)
@@ -891,7 +920,7 @@ namespace winrt::TerminalApp::implementation
         // GH#12267: Make sure that we don't instantly close ourselves when
         // we're readying to accept a defterm connection. In that case, we don't
         // have a tab yet, but will once we're initialized.
-        if (_tabs.Size() == 0)
+        if (_tabs.Size() == 0 && _hasStartupActions)
         {
             CloseWindowRequested.raise(*this, nullptr);
             co_return;
@@ -1379,9 +1408,6 @@ namespace winrt::TerminalApp::implementation
         auto newPaneRun = WUX::Documents::Run();
         newPaneRun.Text(RS_(L"NewPaneRun/Text"));
         newPaneRun.FontStyle(FontStyle::Italic);
-        auto newWindowRun = WUX::Documents::Run();
-        newWindowRun.Text(RS_(L"NewWindowRun/Text"));
-        newWindowRun.FontStyle(FontStyle::Italic);
         auto elevatedRun = WUX::Documents::Run();
         elevatedRun.Text(RS_(L"ElevatedRun/Text"));
         elevatedRun.FontStyle(FontStyle::Italic);
@@ -1390,8 +1416,6 @@ namespace winrt::TerminalApp::implementation
         textBlock.Inlines().Append(newTabRun);
         textBlock.Inlines().Append(WUX::Documents::LineBreak{});
         textBlock.Inlines().Append(newPaneRun);
-        textBlock.Inlines().Append(WUX::Documents::LineBreak{});
-        textBlock.Inlines().Append(newWindowRun);
         textBlock.Inlines().Append(WUX::Documents::LineBreak{});
         textBlock.Inlines().Append(elevatedRun);
 
@@ -1499,19 +1523,20 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_OpenNewTerminalViaDropdown(const NewTerminalArgs newTerminalArgs)
     {
+        _EnsureWorkspaceForTerminal();
+        if (newTerminalArgs.StartingDirectory().empty())
+        {
+            if (const auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+            {
+                newTerminalArgs.StartingDirectory(winrt::hstring{ workspace->root.native() });
+            }
+        }
         // if alt is pressed, open a pane
         const auto window = CoreWindow::GetForCurrentThread();
         const auto rAltState = window.GetKeyState(VirtualKey::RightMenu);
         const auto lAltState = window.GetKeyState(VirtualKey::LeftMenu);
         const auto altPressed = WI_IsFlagSet(lAltState, CoreVirtualKeyStates::Down) ||
                                 WI_IsFlagSet(rAltState, CoreVirtualKeyStates::Down);
-
-        const auto shiftState{ window.GetKeyState(VirtualKey::Shift) };
-        const auto rShiftState = window.GetKeyState(VirtualKey::RightShift);
-        const auto lShiftState = window.GetKeyState(VirtualKey::LeftShift);
-        const auto shiftPressed{ WI_IsFlagSet(shiftState, CoreVirtualKeyStates::Down) ||
-                                 WI_IsFlagSet(lShiftState, CoreVirtualKeyStates::Down) ||
-                                 WI_IsFlagSet(rShiftState, CoreVirtualKeyStates::Down) };
 
         const auto ctrlState{ window.GetKeyState(VirtualKey::Control) };
         const auto rCtrlState = window.GetKeyState(VirtualKey::RightControl);
@@ -1528,30 +1553,11 @@ namespace winrt::TerminalApp::implementation
         const auto dispatchToElevatedWindow = ctrlPressed && !IsRunningElevated();
 
         auto sessionType = "";
-        if ((shiftPressed || dispatchToElevatedWindow) && !debugTap)
+        if (dispatchToElevatedWindow && !debugTap)
         {
-            // Manually fill in the evaluated profile.
-            if (newTerminalArgs.ProfileIndex() != nullptr)
-            {
-                // We want to promote the index to a GUID because there is no "launch to profile index" command.
-                const auto profile = _settings.GetProfileForArgs(newTerminalArgs);
-                if (profile)
-                {
-                    newTerminalArgs.Profile(::Microsoft::Console::Utils::GuidToString(profile.Guid()));
-                    newTerminalArgs.StartingDirectory(_evaluatePathForCwd(profile.EvaluatedStartingDirectory()));
-                }
-            }
-
-            if (dispatchToElevatedWindow)
-            {
-                _OpenElevatedWT(newTerminalArgs);
-                sessionType = "ElevatedWindow";
-            }
-            else
-            {
-                _OpenNewWindow(newTerminalArgs);
-                sessionType = "Window";
-            }
+            _ResolveProfileForElevation(newTerminalArgs);
+            _OpenElevatedWT(newTerminalArgs);
+            sessionType = "ElevatedWindow";
         }
         else
         {
@@ -1563,7 +1569,7 @@ namespace winrt::TerminalApp::implementation
             {
                 return;
             }
-            if (altPressed && !debugTap)
+            if (altPressed && !debugTap && _GetFocusedTabImpl())
             {
                 this->_SplitPane(_GetFocusedTabImpl(),
                                  SplitDirection::Automatic,
@@ -1591,6 +1597,24 @@ namespace winrt::TerminalApp::implementation
     std::wstring TerminalPage::_evaluatePathForCwd(const std::wstring_view path)
     {
         return Utils::EvaluateStartingDirectory(_WindowProperties.VirtualWorkingDirectory(), path);
+    }
+
+    void TerminalPage::_ResolveProfileForElevation(const NewTerminalArgs& newTerminalArgs)
+    {
+        if (newTerminalArgs.ProfileIndex() != nullptr)
+        {
+            // The elevation command line accepts profile GUIDs, not indices.
+            if (const auto profile = _settings.GetProfileForArgs(newTerminalArgs))
+            {
+                newTerminalArgs.Profile(::Microsoft::Console::Utils::GuidToString(profile.Guid()));
+                // A launch directory supplied by the workspace or the caller
+                // takes precedence over the profile's starting directory.
+                if (newTerminalArgs.StartingDirectory().empty())
+                {
+                    newTerminalArgs.StartingDirectory(_evaluatePathForCwd(profile.EvaluatedStartingDirectory()));
+                }
+            }
+        }
     }
 
     // Method Description:
@@ -1867,7 +1891,7 @@ namespace winrt::TerminalApp::implementation
     // - e: the KeyRoutedEventArgs containing info about the keystroke.
     // Return Value:
     // - <none>
-    void TerminalPage::_KeyDownHandler(const Windows::Foundation::IInspectable& /*sender*/, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e)
+    void TerminalPage::_KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e)
     {
         const auto keyStatus = e.KeyStatus();
         const auto vkey = gsl::narrow_cast<WORD>(e.OriginalKey());
@@ -1921,7 +1945,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        if (!_actionDispatch->DoAction(cmd.ActionAndArgs()))
+        if (!_DispatchKeyBinding(sender, cmd.ActionAndArgs()))
         {
             return;
         }
@@ -1942,6 +1966,73 @@ namespace winrt::TerminalApp::implementation
         // The following is used to manually "consume" such dead keys and clear them from the keyboard state.
         _ClearKeyboardState(vkey, scanCode);
         e.Handled(true);
+    }
+
+    static bool workspaceGlobalAction(const ActionAndArgs& action)
+    {
+        if (!action)
+        {
+            return false;
+        }
+        switch (action.Action())
+        {
+        case ShortcutAction::NewTab:
+        case ShortcutAction::NewWindow:
+        case ShortcutAction::DuplicateTab:
+        case ShortcutAction::OpenNewTabDropdown:
+        case ShortcutAction::CloseTab:
+        case ShortcutAction::CloseOtherTabs:
+        case ShortcutAction::CloseTabsAfter:
+        case ShortcutAction::CloseWindow:
+        case ShortcutAction::NextTab:
+        case ShortcutAction::PrevTab:
+        case ShortcutAction::SwitchToTab:
+        case ShortcutAction::MoveTab:
+        case ShortcutAction::TabSearch:
+        case ShortcutAction::RestoreLastClosed:
+        case ShortcutAction::OpenSettings:
+        case ShortcutAction::OpenAbout:
+        case ShortcutAction::ToggleCommandPalette:
+        case ShortcutAction::ToggleFocusMode:
+        case ShortcutAction::ToggleFullscreen:
+        case ShortcutAction::ToggleAlwaysOnTop:
+        case ShortcutAction::SetFocusMode:
+        case ShortcutAction::SetFullScreen:
+        case ShortcutAction::SetMaximized:
+        case ShortcutAction::IdentifyWindow:
+        case ShortcutAction::IdentifyWindows:
+        case ShortcutAction::RenameWindow:
+        case ShortcutAction::OpenWindowRenamer:
+        case ShortcutAction::OpenSystemMenu:
+        case ShortcutAction::OpenWorkspace:
+        case ShortcutAction::Workspaces:
+        case ShortcutAction::Quit:
+            return true;
+        case ShortcutAction::MultipleActions:
+            if (const auto args = action.Args().try_as<MultipleActionsArgs>())
+            {
+                const auto actions = args.Actions();
+                return actions && std::all_of(actions.begin(), actions.end(), workspaceGlobalAction);
+            }
+            return false;
+        default:
+            return false;
+        }
+    }
+
+    bool TerminalPage::_DispatchKeyBinding(const IInspectable& sender, const ActionAndArgs& action)
+    {
+        // Workspace chrome can retain a selected terminal while focus is on a
+        // button, file tree or preview. Only global actions belong there.
+        if (sender == WorkspaceHub() || sender == WorkspaceFilesPanel() || sender == WorkspaceDocumentPanel() ||
+            sender == WorkspaceNavigation() || sender == WorkspaceHeader() || sender == TabRow())
+        {
+            if (!workspaceGlobalAction(action))
+            {
+                return false;
+            }
+        }
+        return _actionDispatch->DoAction(action);
     }
 
     bool TerminalPage::OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down)
@@ -2380,22 +2471,40 @@ namespace winrt::TerminalApp::implementation
 
         std::vector<ActionAndArgs> actions;
 
+        // Every terminal belongs to a workspace, including an untitled one.
+        // Always write a marker so a single named workspace keeps its identity.
+        const bool persistWorkspaceGroups = true;
+        winrt::hstring previousWorkspace;
+        bool firstTab = true;
+        bool hasTabActions = false;
+
         for (auto tab : _tabs)
         {
+            const auto workspaceId = _WorkspaceForTab(tab);
+            if (persistWorkspaceGroups && (firstTab || workspaceId != previousWorkspace))
+            {
+                ActionAndArgs marker;
+                marker.Action(ShortcutAction::OpenWorkspace);
+                marker.Args(OpenWorkspaceArgs{ workspaceId });
+                actions.emplace_back(std::move(marker));
+            }
+            previousWorkspace = workspaceId;
+            firstTab = false;
             auto t = winrt::get_self<implementation::Tab>(tab);
             auto tabActions = t->BuildStartupActions(BuildStartupKind::Persist);
+            hasTabActions = hasTabActions || !tabActions.empty();
             actions.insert(actions.end(), std::make_move_iterator(tabActions.begin()), std::make_move_iterator(tabActions.end()));
         }
 
         // Avoid persisting a window with zero tabs, because `BuildStartupActions` happened to return an empty vector.
-        if (actions.empty())
+        if (!hasTabActions)
         {
             return nullptr;
         }
 
         // if the focused tab was not the last tab, restore that
         auto idx = _GetFocusedTabIndex();
-        if (idx && idx != tabCount - 1)
+        if (idx && (persistWorkspaceGroups || idx != tabCount - 1))
         {
             ActionAndArgs action;
             action.Action(ShortcutAction::SwitchToTab);
@@ -2426,9 +2535,10 @@ namespace winrt::TerminalApp::implementation
 
         layout.LaunchMode({ mode });
 
-        // Only save the content size because the tab size will be added on load.
-        const auto contentWidth = static_cast<float>(_tabContent.ActualWidth());
-        const auto contentHeight = static_cast<float>(_tabContent.ActualHeight());
+        // Save the whole workspace surface, including navigation, explorer and
+        // documents. The tab row's height will be added on load.
+        const auto contentWidth = static_cast<float>(SideTabLayout().ActualWidth());
+        const auto contentHeight = static_cast<float>(SideTabLayout().ActualHeight());
         const winrt::Windows::Foundation::Size windowSize{ contentWidth, contentHeight };
 
         layout.InitialSize(windowSize);
@@ -2501,7 +2611,7 @@ namespace winrt::TerminalApp::implementation
         case ConfirmOnClose::Automatic:
         {
             // Warn if there's more than one tab, or the one tab has more than one pane.
-            return _HasMultipleTabs() || _GetTabImpl(_tabs.GetAt(0))->GetLeafPaneCount() > 1;
+            return _HasMultipleTabs() || (_tabs.Size() == 1 && _GetTabImpl(_tabs.GetAt(0))->GetLeafPaneCount() > 1);
         }
         case ConfirmOnClose::Never:
         default:
@@ -2826,7 +2936,17 @@ namespace winrt::TerminalApp::implementation
             {
                 const auto currentTabIndex = tabIndex.value();
                 const auto delta = direction == MoveTabDirection::Forward ? 1 : -1;
-                _TryMoveTab(currentTabIndex, currentTabIndex + delta);
+                const auto workspaceId = _WorkspaceForTab(_tabs.GetAt(currentTabIndex));
+                for (auto nextTabIndex = gsl::narrow_cast<int32_t>(currentTabIndex) + delta;
+                     nextTabIndex >= 0 && nextTabIndex < gsl::narrow_cast<int32_t>(_tabs.Size());
+                     nextTabIndex += delta)
+                {
+                    if (_WorkspaceForTab(_tabs.GetAt(nextTabIndex)) == workspaceId)
+                    {
+                        _TryMoveTab(currentTabIndex, nextTabIndex);
+                        break;
+                    }
+                }
             }
         }
 
@@ -2935,46 +3055,27 @@ namespace winrt::TerminalApp::implementation
                                   const float splitSize,
                                   std::shared_ptr<Pane> newPane)
     {
-        auto activeTab = tab;
-        // Clever hack for a crash in startup, with multiple sub-commands. Say
-        // you have the following commandline:
-        //
-        //   wtd nt -p "elevated cmd" ; sp -p "elevated cmd" ; sp -p "Command Prompt"
-        //
-        // Where "elevated cmd" is an elevated profile.
-        //
-        // In that scenario, we won't dump off the commandline immediately to an
-        // elevated window, because it's got the final unelevated split in it.
-        // However, when we get to that command, there won't be a tab yet. So
-        // we'd crash right about here.
-        //
-        // Instead, let's just promote this first split to be a tab instead.
-        // Crash avoided, and we don't need to worry about inserting a new-tab
-        // command in at the start.
-        if (!tab)
-        {
-            if (_tabs.Size() == 0)
-            {
-                _CreateNewTabFromPane(newPane);
-                return;
-            }
-            else
-            {
-                activeTab = _GetFocusedTabImpl();
-            }
-        }
-
-        // For now, prevent splitting the _settingsTab. We can always revisit this later.
-        if (*activeTab == _settingsTab)
-        {
-            return;
-        }
-
         // If the caller is calling us with the return value of _MakePane
         // directly, it's possible that nullptr was returned, if the connections
         // was supposed to be launched in an elevated window. In that case, do
         // nothing here. We don't have a pane with which to create the split.
         if (!newPane)
+        {
+            return;
+        }
+
+        const auto activeTab = tab ? tab : _GetFocusedTabImpl();
+        // The active workspace can be empty while other workspaces have tabs.
+        // Promote a split without a target to a new tab, also covering startup
+        // when earlier commands launched elevated terminals in another window.
+        if (!activeTab)
+        {
+            _CreateNewTabFromPane(newPane);
+            return;
+        }
+
+        // For now, prevent splitting the _settingsTab. We can always revisit this later.
+        if (*activeTab == _settingsTab)
         {
             return;
         }
@@ -3655,19 +3756,27 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_WindowSizeChanged(const IInspectable sender, const Microsoft::Terminal::Control::WindowSizeChangedEventArgs args)
     {
+        const auto control = sender.try_as<TermControl>();
+        const auto focusedTab = _GetFocusedTabImpl();
         // Raise if:
         // - Not in quake mode
         // - Not in fullscreen
         // - Only one tab exists
         // - Only one pane exists
+        // - No workspace explorer or document panel is visible
+        // - The requesting control belongs to the focused, active-workspace tab
         // else:
         // - Reset conpty to its original size back
-        if (!WindowProperties().IsQuakeWindow() && !Fullscreen() &&
-            NumberOfTabs() == 1 && _GetFocusedTabImpl()->GetLeafPaneCount() == 1)
+        if (control && focusedTab && _IsTabInActiveWorkspace(*focusedTab) &&
+            !WindowProperties().IsQuakeWindow() && !Fullscreen() &&
+            NumberOfTabs() == 1 && focusedTab->GetLeafPaneCount() == 1 &&
+            WorkspaceFilesPanel().Visibility() == Visibility::Collapsed &&
+            WorkspaceDocumentPanel().Visibility() == Visibility::Collapsed &&
+            focusedTab->GetActiveTerminalControl() == control)
         {
             WindowSizeChanged.raise(*this, args);
         }
-        else if (const auto& control{ sender.try_as<TermControl>() })
+        else if (control)
         {
             const auto& connection = control.Connection();
 
@@ -4184,6 +4293,10 @@ namespace winrt::TerminalApp::implementation
         AlwaysOnTopChanged.raise(*this, nullptr);
 
         _showTabsFullscreen = _currentWindowSettings().ShowTabsFullscreen();
+        // Header visibility depends on this theme property, so apply it before
+        // recomputing the layout.
+        const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings());
+        _tabRow.ShowWorkspacesButton(!theme || !theme.Window() || theme.Window().ShowWorkspacesButton());
         _UpdateTabView();
 
         // Settings AllowDependentAnimations will affect whether animations are
@@ -4192,12 +4305,6 @@ namespace winrt::TerminalApp::implementation
         WUX::Media::Animation::Timeline::AllowDependentAnimations(!_currentWindowSettings().DisableAnimations());
 
         _tabRow.ShowElevationShield(IsRunningElevated() && _currentWindowSettings().ShowAdminShield());
-
-        // Apply the ShowWorkspacesButton theme setting.
-        if (const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings()))
-        {
-            _tabRow.ShowWorkspacesButton(theme.Window() ? theme.Window().ShowWorkspacesButton() : true);
-        }
 
         Media::SolidColorBrush transparent{ Windows::UI::Colors::Transparent() };
         _tabView.Background(transparent);
@@ -4251,10 +4358,13 @@ namespace winrt::TerminalApp::implementation
     // - This function will have no effective result after Create() is called.
     // Arguments:
     // - actions: a list of Actions to process on startup.
+    // - restoreLayout: whether these actions came from a persisted layout.
     // Return Value:
     // - <none>
-    void TerminalPage::SetStartupActions(std::vector<ActionAndArgs> actions)
+    void TerminalPage::SetStartupActions(std::vector<ActionAndArgs> actions, const bool restoreLayout)
     {
+        _hasStartupActions = !actions.empty();
+        _startupActionsRestoreLayout = restoreLayout;
         _startupActions = std::move(actions);
     }
 
@@ -4702,7 +4812,7 @@ namespace winrt::TerminalApp::implementation
         }
         else
         {
-            _tabView.SelectedItem(_settingsTab.TabViewItem());
+            FocusTab(_settingsTab);
         }
     }
 
@@ -5758,16 +5868,1593 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    // Refresh the window-switcher caption. Horizontal tabs use the raw name
-    // and hide it when the window is unnamed. The sidebar footer always shows
-    // a label, matching the flyout entry for this window.
+    TerminalPage::WorkspaceSession* TerminalPage::_FindWorkspace(const winrt::hstring& id)
+    {
+        for (auto& workspace : _workspaces)
+        {
+            if (workspace.id == id)
+            {
+                return &workspace;
+            }
+        }
+        return nullptr;
+    }
+
+    winrt::hstring TerminalPage::_WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const
+    {
+        for (const auto& [candidate, workspaceId] : _tabWorkspaces)
+        {
+            if (candidate == tab)
+            {
+                return workspaceId;
+            }
+        }
+        return _activeWorkspaceId;
+    }
+
+    bool TerminalPage::_IsTabInActiveWorkspace(const winrt::TerminalApp::Tab& tab) const
+    {
+        return _WorkspaceForTab(tab) == _activeWorkspaceId;
+    }
+
+    void TerminalPage::_EnsureWorkspaceForTerminal()
+    {
+        // Explicit terminal commands can arrive before the user opens a
+        // workspace. Give those sessions a real, restorable home.
+        if (_activeWorkspaceId.empty())
+        {
+            _SwitchWorkspace(L"__untitled_workspace__", false);
+        }
+    }
+
+    void TerminalPage::_RefreshWorkspaceNavigation()
+    {
+        if (_tabPosition != TabPosition::Left)
+        {
+            // Live sessions are independent of recent history, which excludes
+            // untitled workspaces and can be edited without closing terminals.
+            const auto row = winrt::get_self<implementation::TabRowControl>(_tabRow);
+            const auto items = row->WorkspaceSwitcherFlyout().Items();
+            items.Clear();
+            for (const auto& workspace : _workspaces)
+            {
+                MenuFlyoutSubItem item{};
+                item.Text(workspace.displayName);
+                item.Tag(box_value(workspace.id));
+                if (workspace.id == _activeWorkspaceId)
+                {
+                    item.Icon(SymbolIcon{ Symbol::Accept });
+                }
+                MenuFlyoutItem activate{};
+                activate.Text(RS_(L"ActivateWorkspaceButton"));
+                activate.Click([weakThis = get_weak(), id = workspace.id](auto&&, auto&&) {
+                    if (const auto page = weakThis.get())
+                    {
+                        page->_SwitchWorkspace(id, false);
+                    }
+                });
+                item.Items().Append(activate);
+                MenuFlyoutItem close{};
+                close.Text(RS_(L"CloseWorkspaceButton"));
+                close.Click([weakThis = get_weak(), id = workspace.id](auto&&, auto&&) -> safe_void_coroutine {
+                    if (const auto page = weakThis.get())
+                    {
+                        co_await page->_CloseWorkspace(id);
+                    }
+                });
+                item.Items().Append(close);
+                items.Append(item);
+            }
+            row->WorkspaceSwitcher().Visibility(_workspaces.empty() ? Visibility::Collapsed : Visibility::Visible);
+            return;
+        }
+
+        const auto weakThis = get_weak();
+        std::erase_if(_workspaceNavigationEntries, [&](const auto& entry) {
+            uint32_t index{};
+            return !_tabs.IndexOf(entry.tab, index);
+        });
+        for (auto& workspace : _workspaces)
+        {
+            if (!workspace.navigationNode)
+            {
+                workspace.navigationNode = MUX::Controls::TreeViewNode{};
+                TextBlock title{};
+                title.Text(workspace.displayName);
+                title.FontWeight(FontWeights::SemiBold());
+                title.TextTrimming(TextTrimming::CharacterEllipsis);
+                ToolTipService::SetToolTip(title, box_value(workspace.root.empty() ? workspace.displayName : hstring{ workspace.root.native() }));
+                MenuFlyout menu{};
+                MenuFlyoutItem close{};
+                close.Text(RS_(L"CloseWorkspaceButton"));
+                close.Click([weakThis, id = workspace.id](auto&&, auto&&) -> safe_void_coroutine {
+                    if (const auto page = weakThis.get())
+                    {
+                        co_await page->_CloseWorkspace(id);
+                    }
+                });
+                menu.Items().Append(close);
+                title.ContextFlyout(menu);
+                workspace.navigationNode.Content(title);
+                workspace.navigationNode.IsExpanded(true);
+                WorkspaceNavigation().RootNodes().Append(workspace.navigationNode);
+            }
+
+            std::vector<MUX::Controls::TreeViewNode> children;
+            for (const auto& tab : _tabs)
+            {
+                if (_WorkspaceForTab(tab) != workspace.id)
+                {
+                    continue;
+                }
+                auto entry = std::find_if(_workspaceNavigationEntries.begin(), _workspaceNavigationEntries.end(), [&](const auto& value) { return value.tab == tab; });
+                if (entry == _workspaceNavigationEntries.end())
+                {
+                    MUX::Controls::TreeViewNode node{};
+                    Grid row{};
+                    ColumnDefinition iconColumn{};
+                    iconColumn.Width(GridLengthHelper::Auto());
+                    row.ColumnDefinitions().Append(iconColumn);
+                    row.ColumnDefinitions().Append(ColumnDefinition{});
+                    ColumnDefinition closeColumn{};
+                    closeColumn.Width(GridLengthHelper::Auto());
+                    row.ColumnDefinitions().Append(closeColumn);
+
+                    ContentControl icon{};
+                    icon.IsTabStop(false);
+                    icon.Content(UI::IconPathConverter::IconWUX(tab.Icon()));
+                    tab.PropertyChanged([weakIcon = winrt::make_weak(icon)](const IInspectable& sender, const WUX::Data::PropertyChangedEventArgs& args) {
+                        if (args.PropertyName() == L"Icon")
+                        {
+                            if (const auto target = weakIcon.get())
+                            {
+                                target.Content(UI::IconPathConverter::IconWUX(sender.as<winrt::TerminalApp::Tab>().Icon()));
+                            }
+                        }
+                    });
+                    icon.Width(16);
+                    icon.Height(16);
+                    icon.Margin(ThicknessHelper::FromLengths(0, 0, 8, 0));
+                    row.Children().Append(icon);
+
+                    // Reuse the real header, including rename, progress and
+                    // read-only/bell status, without creating another Tab.
+                    ContentPresenter header{};
+                    const auto originalHeader = tab.TabViewItem().Header();
+                    tab.TabViewItem().Header(nullptr);
+                    header.Content(originalHeader);
+                    Grid::SetColumn(header, 1);
+                    row.Children().Append(header);
+                    row.ContextFlyout(tab.TabViewItem().ContextFlyout());
+                    WUX::Data::Binding titleBinding{};
+                    titleBinding.Source(tab);
+                    titleBinding.Path(PropertyPath{ L"Title" });
+                    titleBinding.Mode(WUX::Data::BindingMode::OneWay);
+                    row.SetBinding(Automation::AutomationProperties::NameProperty(), titleBinding);
+                    row.SetBinding(ToolTipService::ToolTipProperty(), titleBinding);
+                    row.RightTapped([weakThis, weakTab = winrt::make_weak(tab)](auto&&, auto&&) {
+                        if (const auto page = weakThis.get())
+                        {
+                            if (const auto target = weakTab.get())
+                            {
+                                page->FocusTab(target);
+                            }
+                        }
+                    });
+                    row.PointerReleased([weakThis, weakTab = winrt::make_weak(tab)](const IInspectable&, const WUX::Input::PointerRoutedEventArgs& args) {
+                        if (const auto page = weakThis.get(); page && page->_tabItemMiddleClickHookEnabled &&
+                                                              args.GetCurrentPoint(nullptr).Properties().PointerUpdateKind() == Windows::UI::Input::PointerUpdateKind::MiddleButtonReleased)
+                        {
+                            if (const auto target = weakTab.get())
+                            {
+                                page->_OnTabPointerReleasedCloseTab(target.TabViewItem());
+                                args.Handled(true);
+                            }
+                        }
+                    });
+
+                    Button close{};
+                    close.Content(box_value(L"\xE711"));
+                    close.FontFamily(Media::FontFamily{ L"Segoe MDL2 Assets" });
+                    close.FontSize(10);
+                    close.Width(28);
+                    close.Height(28);
+                    close.MinWidth(0);
+                    close.MinHeight(0);
+                    close.Padding(ThicknessHelper::FromUniformLength(0));
+                    close.Background(SolidColorBrush{ Colors::Transparent() });
+                    close.BorderThickness(ThicknessHelper::FromUniformLength(0));
+                    Automation::AutomationProperties::SetName(close, RS_(L"TabClose"));
+                    close.Click([weakThis, weakTab = winrt::make_weak(tab)](auto&&, auto&&) {
+                        if (const auto page = weakThis.get())
+                        {
+                            if (const auto target = weakTab.get())
+                            {
+                                page->_HandleCloseTabRequested(target);
+                            }
+                        }
+                    });
+                    Grid::SetColumn(close, 2);
+                    row.Children().Append(close);
+                    node.Content(row);
+                    _GetTabImpl(tab)->SetNavigationRow(row, close);
+                    _workspaceNavigationEntries.push_back({ tab, node });
+                    entry = std::prev(_workspaceNavigationEntries.end());
+                }
+                children.push_back(entry->node);
+            }
+
+            const auto nodes = workspace.navigationNode.Children();
+            bool changed = nodes.Size() != children.size();
+            for (uint32_t i = 0; !changed && i < nodes.Size(); ++i)
+            {
+                changed = nodes.GetAt(i) != children[i];
+            }
+            if (changed)
+            {
+                const auto expanded = nodes.Size() == 0 || workspace.navigationNode.IsExpanded();
+                // WinUI's TreeView retains the selected node while its parent
+                // collection changes. Clear it before replacing that collection.
+                WorkspaceNavigation().SelectedNode(nullptr);
+                for (auto i = nodes.Size(); i > 0; --i)
+                {
+                    if (std::find(children.begin(), children.end(), nodes.GetAt(i - 1)) == children.end())
+                    {
+                        nodes.RemoveAt(i - 1);
+                    }
+                }
+                for (uint32_t i = 0; i < children.size(); ++i)
+                {
+                    if (i < nodes.Size() && nodes.GetAt(i) == children[i])
+                    {
+                        continue;
+                    }
+                    uint32_t previous{};
+                    if (nodes.IndexOf(children[i], previous))
+                    {
+                        nodes.RemoveAt(previous);
+                        WorkspaceNavigation().UpdateLayout();
+                    }
+                    nodes.InsertAt(i, children[i]);
+                }
+                workspace.navigationNode.IsExpanded(expanded);
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceNavigationRowLoaded(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        const auto host = sender.as<ContentControl>();
+        if (const auto node = host.DataContext().try_as<MUX::Controls::TreeViewNode>())
+        {
+            const auto content = node.Content().as<FrameworkElement>();
+            // WinUI can retain a recycled container while realizing its
+            // replacement. A live row must have only one visual parent.
+            for (auto parent = VisualTreeHelper::GetParent(content); parent; parent = VisualTreeHelper::GetParent(parent))
+            {
+                if (const auto previous = parent.try_as<ContentControl>(); previous && previous.Content() == content)
+                {
+                    previous.Content(nullptr);
+                    break;
+                }
+            }
+            host.Content(content);
+        }
+    }
+
+    void TerminalPage::_WorkspaceNavigationRowUnloaded(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        sender.as<ContentControl>().Content(nullptr);
+    }
+
+    void TerminalPage::_SyncWorkspaceNavigationSelection()
+    {
+        if (_tabPosition != TabPosition::Left)
+        {
+            return;
+        }
+        const auto focusedTab = _GetFocusedTab();
+        for (const auto& entry : _workspaceNavigationEntries)
+        {
+            _GetTabImpl(entry.tab)->SetNavigationRowSelected(entry.tab == focusedTab && _IsTabInActiveWorkspace(entry.tab));
+        }
+        if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            auto selected = workspace->navigationNode;
+            for (const auto& entry : _workspaceNavigationEntries)
+            {
+                if (entry.tab == workspace->lastFocused && workspace->navigationNode.IsExpanded())
+                {
+                    selected = entry.node;
+                    break;
+                }
+            }
+            WorkspaceNavigation().SelectedNode(selected);
+        }
+        for (const auto& workspace : _workspaces)
+        {
+            if (workspace.navigationNode)
+            {
+                workspace.navigationNode.Content().as<TextBlock>().FontWeight(workspace.id == _activeWorkspaceId ? FontWeights::SemiBold() : FontWeights::Normal());
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceNavigationInvoked(const MUX::Controls::TreeView&, const MUX::Controls::TreeViewItemInvokedEventArgs& args)
+    {
+        const auto node = args.InvokedItem().try_as<MUX::Controls::TreeViewNode>();
+        for (const auto& entry : _workspaceNavigationEntries)
+        {
+            if (entry.node == node)
+            {
+                uint32_t index{};
+                if (_tabs.IndexOf(entry.tab, index))
+                {
+                    _SelectTab(index);
+                }
+                return;
+            }
+        }
+        for (const auto& workspace : _workspaces)
+        {
+            if (workspace.navigationNode == node)
+            {
+                // Copy the ID: activation can grow/reallocate the session list.
+                const auto id = workspace.id;
+                _SwitchWorkspace(id, false);
+                return;
+            }
+        }
+    }
+
+    Windows::Foundation::IAsyncAction TerminalPage::_CloseWorkspace(winrt::hstring id)
+    {
+        const auto workspace = _FindWorkspace(id);
+        if (!workspace)
+        {
+            co_return;
+        }
+        const auto hasTerminals = std::any_of(_tabs.begin(), _tabs.end(), [&](const auto& tab) { return _WorkspaceForTab(tab) == id; });
+        const auto weakThis = get_weak();
+        if (hasTerminals)
+        {
+            ContentDialog dialog{};
+            dialog.Title(box_value(RS_(L"CloseWorkspaceButton") + L" — " + workspace->displayName));
+            dialog.Content(box_value(RS_(L"CloseWorkspaceWarning")));
+            dialog.PrimaryButtonText(RS_(L"CloseWorkspaceButton"));
+            dialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
+            dialog.DefaultButton(ContentDialogButton::Close);
+            const auto presenter = _dialogPresenter.get();
+            if (!presenter || co_await presenter.ShowDialog(dialog) != ContentDialogResult::Primary)
+            {
+                co_return;
+            }
+        }
+        if (const auto page = weakThis.get())
+        {
+            // The modal confirmation covers all terminals, including read-only
+            // panes. Documents are currently read-only previews, with no edits
+            // to save. Re-query after awaiting: shells may have exited meanwhile.
+            std::vector<winrt::TerminalApp::Tab> tabs;
+            for (const auto& tab : page->_tabs)
+            {
+                if (page->_WorkspaceForTab(tab) == id)
+                {
+                    tabs.push_back(tab);
+                }
+            }
+            for (const auto& tab : tabs)
+            {
+                tab.Close();
+            }
+            if (const auto closing = page->_FindWorkspace(id); closing && closing->navigationNode)
+            {
+                uint32_t index{};
+                if (page->WorkspaceNavigation().RootNodes().IndexOf(closing->navigationNode, index))
+                {
+                    page->WorkspaceNavigation().SelectedNode(nullptr);
+                    page->WorkspaceNavigation().RootNodes().RemoveAt(index);
+                }
+            }
+            std::erase_if(page->_workspaceDocuments, [&](const auto& document) { return document.workspaceId == id; });
+            std::erase_if(page->_workspaces, [&](const auto& session) { return session.id == id; });
+            if (page->_activeWorkspaceId == id)
+            {
+                page->_activeWorkspaceId = L"";
+                if (!page->_workspaces.empty())
+                {
+                    const auto next = page->_workspaces.front().id;
+                    page->_SwitchWorkspace(next, false);
+                }
+                else
+                {
+                    page->_UpdateWorkspaceFilesUI();
+                    page->_UpdateWorkspaceLabels();
+                    page->_ShowWorkspaceHub();
+                }
+            }
+            page->_RefreshWorkspaceNavigation();
+            page->_SyncWorkspaceNavigationSelection();
+        }
+    }
+
+    void TerminalPage::_UpdateWorkspaceTabVisibility()
+    {
+        const auto wasChanging = _changingWorkspace;
+        _changingWorkspace = true;
+
+        winrt::TerminalApp::Tab selected{ nullptr };
+        if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            uint32_t index{};
+            if (workspace->lastFocused && _tabs.IndexOf(workspace->lastFocused, index))
+            {
+                selected = workspace->lastFocused;
+            }
+        }
+
+        for (const auto& tab : _tabs)
+        {
+            const bool visible = _IsTabInActiveWorkspace(tab);
+            tab.TabViewItem().Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
+            if (visible && !selected)
+            {
+                selected = tab;
+            }
+        }
+
+        if (selected)
+        {
+            _tabView.SelectedItem(selected.TabViewItem());
+        }
+        else
+        {
+            _tabView.SelectedItem(nullptr);
+            _tabContent.Children().Clear();
+            for (const auto& tab : _tabs)
+            {
+                tab.Focus(FocusState::Unfocused);
+            }
+        }
+        _changingWorkspace = wasChanging;
+
+        if (selected)
+        {
+            _UpdatedSelectedTab(selected, false);
+        }
+        _UpdateTabView();
+        _SyncWorkspaceNavigationSelection();
+    }
+
+    void TerminalPage::_SwitchWorkspace(const winrt::hstring& id, bool createTabIfEmpty)
+    {
+        if (id.empty())
+        {
+            return;
+        }
+
+        const auto switching = _activeWorkspaceId != id;
+        if (switching)
+        {
+            _SaveWorkspaceViewState();
+        }
+        auto workspace = _FindWorkspace(id);
+        const auto isNew = workspace == nullptr;
+        if (!workspace)
+        {
+            std::filesystem::path root;
+            const std::filesystem::path candidate{ std::wstring_view{ id } };
+            std::error_code error;
+            if (candidate.is_absolute() && std::filesystem::is_directory(candidate, error))
+            {
+                root = candidate.lexically_normal();
+            }
+            const auto displayName = id == L"__untitled_workspace__" ? RS_(L"UntitledWorkspaceName") :
+                                     root.empty() ? id :
+                                                    winrt::hstring{ root.filename().empty() ? root.native() : root.filename().native() };
+            _workspaces.push_back({ id, displayName, root, root, nullptr });
+            workspace = &_workspaces.back();
+        }
+
+        _activeWorkspaceId = id;
+        _RefreshWorkspaceNavigation();
+        if (!_restoringLayout && id != L"__untitled_workspace__")
+        {
+            ApplicationState::SharedInstance().RecordRecentWorkspace(id);
+        }
+        _ShowWorkspaceContent();
+        _UpdateWorkspaceTabVisibility();
+        _UpdateWorkspaceLabels();
+        if (switching)
+        {
+            _UpdateWorkspaceFilesUI();
+        }
+        _ResizeWorkspaceFilesColumn();
+
+        // Restore focus after the document surface has been restored as well.
+        // The tab switcher keeps focus while previewing a workspace's tabs.
+        const auto palette = CommandPaletteElement();
+        if (!palette || palette.Visibility() != Visibility::Visible)
+        {
+            _FocusCurrentTab(false);
+        }
+
+        if (createTabIfEmpty && isNew)
+        {
+            bool hasTab = false;
+            for (const auto& tab : _tabs)
+            {
+                if (_IsTabInActiveWorkspace(tab))
+                {
+                    hasTab = true;
+                    break;
+                }
+            }
+            if (!hasTab)
+            {
+                NewTerminalArgs args{};
+                if (!workspace->root.empty())
+                {
+                    args.StartingDirectory(winrt::hstring{ workspace->root.native() });
+                }
+                _OpenNewTab(args);
+            }
+        }
+    }
+
+    void TerminalPage::_OpenWorkspace(const winrt::hstring& id)
+    {
+        if (id.empty())
+        {
+            return;
+        }
+        if (_FindWorkspace(id))
+        {
+            _SwitchWorkspace(id);
+            return;
+        }
+
+        // Older named-window workspaces are imported into the current window.
+        // Their terminal tabs are recreated here, while existing tabs stay live.
+        if (const auto layout = ApplicationState::SharedInstance().TakeWorkspace(id))
+        {
+            // Importing a saved workspace is an explicit user open, even though
+            // its tab actions use restoration insertion semantics.
+            if (!_restoringLayout && id != L"__untitled_workspace__")
+            {
+                ApplicationState::SharedInstance().RecordRecentWorkspace(id);
+            }
+            std::vector<ActionAndArgs> actions;
+            const auto tabIndexOffset = _tabs.Size();
+            if (const auto tabLayout = layout.TabLayout())
+            {
+                // Older layouts have no workspace markers. Those tabs need
+                // the saved name as their initial owner. Marker based layouts
+                // choose the correct workspace before creating each tab.
+                if (tabLayout.Size() < 2 || tabLayout.GetAt(0).Action() != ShortcutAction::OpenWorkspace)
+                {
+                    _SwitchWorkspace(id, false);
+                }
+                for (const auto& action : tabLayout)
+                {
+                    // Keep the current physical window name and translate the
+                    // restored focus index to its position among live tabs.
+                    if (action.Action() == ShortcutAction::SwitchToTab)
+                    {
+                        if (const auto switchArgs = action.Args().try_as<SwitchToTabArgs>())
+                        {
+                            ActionAndArgs adjusted;
+                            adjusted.Action(ShortcutAction::SwitchToTab);
+                            adjusted.Args(SwitchToTabArgs{ tabIndexOffset + switchArgs.TabIndex() });
+                            actions.emplace_back(std::move(adjusted));
+                        }
+                    }
+                    else if (action.Action() != ShortcutAction::RenameWindow)
+                    {
+                        actions.push_back(action);
+                    }
+                }
+            }
+            if (!actions.empty())
+            {
+                ProcessStartupActions(std::move(actions), {}, {}, true);
+            }
+            else
+            {
+                _SwitchWorkspace(id);
+            }
+            return;
+        }
+        _SwitchWorkspace(id);
+    }
+
+    safe_void_coroutine TerminalPage::_CreateNamedWorkspace()
+    {
+        ContentDialog dialog{};
+        dialog.Title(winrt::box_value(RS_(L"NewWorkspaceTitle")));
+        dialog.PrimaryButtonText(RS_(L"CreateWorkspaceButton"));
+        dialog.CloseButtonText(RS_(L"CancelWorkspaceButton"));
+        dialog.DefaultButton(ContentDialogButton::Primary);
+        TextBox nameBox{};
+        nameBox.PlaceholderText(RS_(L"WorkspaceNamePlaceholder"));
+        dialog.Content(nameBox);
+
+        const auto weakThis = get_weak();
+        if (const auto presenter = _dialogPresenter.get())
+        {
+            if (co_await presenter.ShowDialog(dialog) == ContentDialogResult::Primary)
+            {
+                if (const auto page = weakThis.get())
+                {
+                    const auto name = nameBox.Text();
+                    if (!name.empty() && name != L"__untitled_workspace__")
+                    {
+                        page->_SwitchWorkspace(name);
+                    }
+                }
+            }
+        }
+    }
+
+    safe_void_coroutine TerminalPage::_PickWorkspaceFolder()
+    try
+    {
+        if (!_hostingHwnd)
+        {
+            co_return;
+        }
+        const auto weakThis = get_weak();
+        const auto folder = co_await OpenFilePicker(*_hostingHwnd, [](auto&& dialog) {
+            DWORD flags{};
+            THROW_IF_FAILED(dialog->GetOptions(&flags));
+            THROW_IF_FAILED(dialog->SetOptions(flags | FOS_PICKFOLDERS));
+        });
+        if (const auto page = weakThis.get(); page && !folder.empty())
+        {
+            page->_SwitchWorkspace(winrt::hstring{ std::filesystem::path{ std::wstring_view{ folder } }.lexically_normal().native() });
+        }
+    }
+    CATCH_LOG()
+
+    // Show the active workspace name in both tab-strip layouts.
     void TerminalPage::_UpdateWorkspaceLabels()
     {
-        const auto name = _WindowProperties.WindowName();
-        _tabRow.WorkspaceName(name);
-        _tabRow.SidebarWorkspaceLabel(name.empty() ?
-                                          winrt::hstring{ RS_fmt(L"WindowListUnnamedEntry", _WindowProperties.WindowId()) } :
-                                          name);
+        if (const auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            WorkspaceHeaderName().Text(workspace->displayName);
+            _tabRow.WorkspaceName(workspace->displayName);
+            _tabRow.SidebarWorkspaceLabel(workspace->displayName);
+        }
+        else
+        {
+            WorkspaceHeaderName().Text(L"");
+            _tabRow.WorkspaceName(L"");
+            _tabRow.SidebarWorkspaceLabel(L"");
+        }
+    }
+
+    static ScrollViewer workspaceScrollViewer(const DependencyObject& root)
+    {
+        if (const auto viewer = root.try_as<ScrollViewer>())
+        {
+            return viewer;
+        }
+        for (int32_t i = 0; i < VisualTreeHelper::GetChildrenCount(root); ++i)
+        {
+            if (const auto viewer = workspaceScrollViewer(VisualTreeHelper::GetChild(root, i)))
+            {
+                return viewer;
+            }
+        }
+        return nullptr;
+    }
+
+    static auto workspaceDocumentFormattingScope(const RichEditBox& editor)
+    {
+        // Keep each formatting batch independent of the current view state.
+        const auto selection = editor.Document().Selection();
+        const auto start = selection.StartPosition();
+        const auto end = selection.EndPosition();
+        const auto scroll = workspaceScrollViewer(editor);
+        const auto offset = scroll ? scroll.VerticalOffset() : 0.0;
+        const auto readOnly = editor.IsReadOnly();
+        editor.IsReadOnly(false);
+        return wil::scope_exit([editor, selection, start, end, scroll, offset, readOnly]() noexcept {
+            editor.IsReadOnly(readOnly);
+            selection.SetRange(start, end);
+            if (scroll)
+            {
+                scroll.ChangeView(nullptr, offset, nullptr, true);
+            }
+        });
+    }
+
+    void TerminalPage::_SaveWorkspaceViewState()
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            workspace->fileEntries = _workspaceFileEntries;
+            workspace->fileRoot = WorkspaceFileTree().RootNodes().Size() ? WorkspaceFileTree().RootNodes().GetAt(0) : nullptr;
+            workspace->selectedFile = WorkspaceFileTree().SelectedNode();
+            workspace->searchQuery = WorkspaceFileSearchBox().Text();
+            if (workspace->searchQuery.empty())
+            {
+                workspace->treeStatus = WorkspaceFilesStatus().Text();
+                if (const auto scroll = workspaceScrollViewer(WorkspaceFileTree()))
+                {
+                    workspace->treeScrollOffset = scroll.VerticalOffset();
+                }
+            }
+            const auto index = WorkspaceFileSearchResults().SelectedIndex();
+            if (index >= 0 && static_cast<size_t>(index) < _workspaceSearchResults.size())
+            {
+                workspace->selectedSearchResult = _workspaceSearchResults[index];
+            }
+            // A restored search may still be pending. Do not overwrite its
+            // saved selection/scroll with the temporarily empty result list.
+            if (!workspace->searchQuery.empty() && !_workspaceSearchResults.empty())
+            {
+                if (const auto scroll = workspaceScrollViewer(WorkspaceFileSearchResults()))
+                {
+                    workspace->searchScrollOffset = scroll.VerticalOffset();
+                }
+            }
+            if (workspace->documentVisible && !workspace->selectedDocument.empty())
+            {
+                const auto document = WorkspaceDocumentEditor().Document();
+                document.GetText(TextGetOptions::FormatRtf, workspace->previewRtf);
+                workspace->previewPath = workspace->selectedDocument;
+                workspace->previewStatus = WorkspaceDocumentStatus().Text();
+                workspace->previewSelectionStart = document.Selection().StartPosition();
+                workspace->previewSelectionEnd = document.Selection().EndPosition();
+                workspace->previewLineCount = _workspaceDocumentLineCount;
+                if (const auto scroll = workspaceScrollViewer(WorkspaceDocumentEditor()))
+                {
+                    workspace->previewScrollOffset = scroll.VerticalOffset();
+                }
+            }
+        }
+    }
+
+    void TerminalPage::_UpdateWorkspaceFilesUI()
+    {
+        _restoringWorkspaceView = true;
+        const auto restore = wil::scope_exit([&]() noexcept { _restoringWorkspaceView = false; });
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        const bool hasFolder = workspace && !workspace->root.empty();
+        ++_workspaceSearchVersion;
+        const auto query = workspace ? workspace->searchQuery : hstring{};
+        WorkspaceFileSearchBox().Text(query);
+        _workspaceSearchResults.clear();
+        WorkspaceFileSearchResults().Items().Clear();
+        WorkspaceFileSearchResults().Visibility(query.empty() ? Visibility::Collapsed : Visibility::Visible);
+        WorkspaceFileTree().Visibility(query.empty() ? Visibility::Visible : Visibility::Collapsed);
+        WorkspaceFileTree().SelectedNode(nullptr);
+        WorkspaceFileTree().RootNodes().Clear();
+        _workspaceFileEntries.clear();
+        WorkspaceFilesPanel().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
+        WorkspaceFilesDivider().Visibility(hasFolder ? Visibility::Visible : Visibility::Collapsed);
+        _ResizeWorkspaceFilesColumn();
+        if (hasFolder)
+        {
+            if (workspace->fileRoot)
+            {
+                _workspaceFileEntries = workspace->fileEntries;
+                WorkspaceFileTree().RootNodes().Append(workspace->fileRoot);
+                WorkspaceFileTree().SelectedNode(workspace->selectedFile);
+                WorkspaceFilesStatus().Text(workspace->treeStatus);
+                WorkspaceFileTree().UpdateLayout();
+                if (const auto scroll = workspaceScrollViewer(WorkspaceFileTree()))
+                {
+                    scroll.ChangeView(nullptr, workspace->treeScrollOffset, nullptr, true);
+                }
+            }
+            else
+            {
+                _RefreshWorkspaceFiles();
+            }
+            if (!query.empty())
+            {
+                WorkspaceFilesStatus().Text(RS_(L"WorkspaceSearchRunning"));
+                _SearchWorkspaceFilesAsync(_activeWorkspaceId, workspace->root, query, _workspaceSearchVersion);
+            }
+        }
+        else
+        {
+            _workspaceFileEntries.clear();
+            WorkspaceFileTree().RootNodes().Clear();
+            WorkspaceFilesStatus().Text(L"");
+        }
+        _RefreshWorkspaceDocumentTabs();
+    }
+
+    void TerminalPage::_RefreshWorkspaceFiles()
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace || workspace->root.empty())
+        {
+            return;
+        }
+
+        _workspaceFileEntries.clear();
+        WorkspaceFileTree().SelectedNode(nullptr);
+        WorkspaceFileTree().RootNodes().Clear();
+        const auto root = _CreateWorkspaceFileNode(workspace->root, true);
+        WorkspaceFileTree().RootNodes().Append(root);
+        _PopulateWorkspaceFileNode(root);
+        root.IsExpanded(true);
+    }
+
+    MUX::Controls::TreeViewNode TerminalPage::_CreateWorkspaceFileNode(const std::filesystem::path& path, const bool isDirectory)
+    {
+        MUX::Controls::TreeViewNode node{};
+        // Nodes hold data, never visual elements. The template creates fresh
+        // visuals when a cached tree is attached or its containers recycled.
+        const auto label = path.filename().empty() ? path.native() : path.filename().native();
+        const auto content = winrt::single_threaded_observable_map<hstring, IInspectable>();
+        content.Insert(L"Name", box_value(hstring{ label }));
+        content.Insert(L"Glyph", box_value(isDirectory ? L"\xE8B7" : L"\xE8A5"));
+        node.Content(content);
+        node.HasUnrealizedChildren(isDirectory);
+        _workspaceFileEntries.push_back({ node, path, isDirectory });
+        return node;
+    }
+
+    const TerminalPage::WorkspaceFileEntry* TerminalPage::_FindWorkspaceFileNode(const MUX::Controls::TreeViewNode& node) const
+    {
+        const auto entry = std::find_if(_workspaceFileEntries.begin(), _workspaceFileEntries.end(), [&](const auto& value) {
+            return value.node == node;
+        });
+        return entry == _workspaceFileEntries.end() ? nullptr : &*entry;
+    }
+
+    void TerminalPage::_PopulateWorkspaceFileNode(const MUX::Controls::TreeViewNode& node)
+    {
+        const auto entry = _FindWorkspaceFileNode(node);
+        if (!entry || !entry->isDirectory)
+        {
+            return;
+        }
+        const auto directory = entry->path;
+        node.HasUnrealizedChildren(false);
+        node.Children().Clear();
+
+        std::error_code error;
+        auto iterator = std::filesystem::directory_iterator(directory,
+                                                            std::filesystem::directory_options::skip_permission_denied,
+                                                            error);
+        const std::filesystem::directory_iterator end{};
+        std::vector<std::pair<std::filesystem::path, bool>> children;
+        while (!error && iterator != end && children.size() < 500)
+        {
+            const auto& entry = *iterator;
+            std::error_code entryError;
+            const bool isDirectory = entry.is_directory(entryError);
+            const bool isSymlink = entry.is_symlink(entryError);
+            if (!entryError && !(isDirectory && isSymlink))
+            {
+                children.emplace_back(entry.path(), isDirectory);
+            }
+            iterator.increment(error);
+        }
+
+        if (error)
+        {
+            WorkspaceFilesStatus().Text(RS_(L"WorkspaceFolderReadError"));
+            return;
+        }
+
+        const bool hasMore = iterator != end;
+        std::sort(children.begin(), children.end(), [](const auto& left, const auto& right) {
+            if (left.second != right.second)
+            {
+                return left.second;
+            }
+            return _wcsicmp(left.first.filename().c_str(), right.first.filename().c_str()) < 0;
+        });
+
+        for (const auto& [path, isDirectory] : children)
+        {
+            node.Children().Append(_CreateWorkspaceFileNode(path, isDirectory));
+        }
+        WorkspaceFilesStatus().Text(RS_(L"WorkspaceFilesShownPrefix") + winrt::hstring{ std::to_wstring(children.size()) } + (hasMore ? L"+" : L""));
+    }
+
+    void TerminalPage::_WorkspaceFileInvoked(const MUX::Controls::TreeView&, const MUX::Controls::TreeViewItemInvokedEventArgs& args)
+    {
+        const auto node = args.InvokedItem().try_as<MUX::Controls::TreeViewNode>();
+        if (const auto entry = _FindWorkspaceFileNode(node))
+        {
+            if (entry->isDirectory)
+            {
+                node.IsExpanded(!node.IsExpanded());
+            }
+            else
+            {
+                try
+                {
+                    _OpenWorkspaceDocument(entry->path, false);
+                }
+                catch (const winrt::hresult_error& error)
+                {
+                    WorkspaceFilesStatus().Text(error.message());
+                }
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileExpanding(const MUX::Controls::TreeView&, const MUX::Controls::TreeViewExpandingEventArgs& args)
+    {
+        if (args.Node().HasUnrealizedChildren())
+        {
+            _PopulateWorkspaceFileNode(args.Node());
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileDoubleTapped(const IInspectable&, const WUX::Input::DoubleTappedRoutedEventArgs& args)
+    {
+        if (const auto entry = _FindWorkspaceFileNode(WorkspaceFileTree().SelectedNode()); entry && !entry->isDirectory)
+        {
+            try
+            {
+                _OpenWorkspaceDocument(entry->path, true);
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                WorkspaceFilesStatus().Text(error.message());
+            }
+            args.Handled(true);
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileSearchChanged(const IInspectable&, const TextChangedEventArgs&)
+    {
+        if (_restoringWorkspaceView)
+        {
+            return;
+        }
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace || workspace->root.empty())
+        {
+            return;
+        }
+
+        const auto query = WorkspaceFileSearchBox().Text();
+        if (workspace->searchQuery.empty())
+        {
+            workspace->treeStatus = WorkspaceFilesStatus().Text();
+            if (const auto scroll = workspaceScrollViewer(WorkspaceFileTree()))
+            {
+                workspace->treeScrollOffset = scroll.VerticalOffset();
+            }
+        }
+        workspace->searchQuery = query;
+        workspace->selectedSearchResult.clear();
+        workspace->searchScrollOffset = 0;
+        const auto version = ++_workspaceSearchVersion;
+        const bool searching = !query.empty();
+        WorkspaceFileTree().Visibility(searching ? Visibility::Collapsed : Visibility::Visible);
+        WorkspaceFileSearchResults().Visibility(searching ? Visibility::Visible : Visibility::Collapsed);
+        _workspaceSearchResults.clear();
+        WorkspaceFileSearchResults().Items().Clear();
+        if (searching)
+        {
+            WorkspaceFilesStatus().Text(RS_(L"WorkspaceSearchRunning"));
+            _SearchWorkspaceFilesAsync(_activeWorkspaceId, workspace->root, query, version);
+        }
+        else
+        {
+            WorkspaceFilesStatus().Text(workspace->treeStatus);
+            WorkspaceFileTree().UpdateLayout();
+            if (const auto scroll = workspaceScrollViewer(WorkspaceFileTree()))
+            {
+                scroll.ChangeView(nullptr, workspace->treeScrollOffset, nullptr, true);
+            }
+        }
+    }
+
+    safe_void_coroutine TerminalPage::_SearchWorkspaceFilesAsync(winrt::hstring workspaceId, std::filesystem::path root, winrt::hstring query, const uint64_t version)
+    {
+        const auto weakThis = get_weak();
+        const auto dispatcher = Dispatcher();
+        co_await winrt::resume_after(150ms);
+        co_await wil::resume_foreground(dispatcher);
+        if (const auto page = weakThis.get(); !page || page->_workspaceSearchVersion != version || page->_activeWorkspaceId != workspaceId)
+        {
+            co_return;
+        }
+
+        co_await winrt::resume_background();
+        std::wstring lowerQuery{ std::wstring_view{ query } };
+        std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), [](wchar_t ch) { return std::towlower(ch); });
+        std::vector<std::filesystem::path> results;
+        std::error_code error;
+        auto iterator = std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, error);
+        const std::filesystem::recursive_directory_iterator end{};
+        size_t scanned = 0;
+        while (!error && iterator != end && scanned < 20000 && results.size() < 100)
+        {
+            const auto& entry = *iterator;
+            std::error_code entryError;
+            if (entry.is_directory(entryError))
+            {
+                auto name = entry.path().filename().wstring();
+                std::transform(name.begin(), name.end(), name.begin(), [](wchar_t ch) { return std::towlower(ch); });
+                if (name == L".git" || name == L"node_modules" || name == L"packages" || name == L"bin" || name == L"obj" || name == L"build")
+                {
+                    iterator.disable_recursion_pending();
+                }
+            }
+            else if (entry.is_regular_file(entryError))
+            {
+                auto relative = entry.path().lexically_relative(root).wstring();
+                std::transform(relative.begin(), relative.end(), relative.begin(), [](wchar_t ch) { return std::towlower(ch); });
+                if (relative.find(lowerQuery) != std::wstring::npos)
+                {
+                    results.push_back(entry.path());
+                }
+            }
+            ++scanned;
+            iterator.increment(error);
+        }
+        const bool limited = iterator != end || static_cast<bool>(error);
+
+        co_await wil::resume_foreground(dispatcher);
+        if (const auto page = weakThis.get(); page && page->_workspaceSearchVersion == version && page->_activeWorkspaceId == workspaceId)
+        {
+            page->_workspaceSearchResults = std::move(results);
+            for (uint32_t i = 0; i < page->_workspaceSearchResults.size(); ++i)
+            {
+                ListViewItem item{};
+                const auto relative = page->_workspaceSearchResults[i].lexically_relative(root);
+                item.Content(winrt::box_value(winrt::hstring{ relative.native() }));
+                page->WorkspaceFileSearchResults().Items().Append(item);
+            }
+            page->WorkspaceFilesStatus().Text(RS_(L"WorkspaceSearchResultsPrefix") + winrt::hstring{ std::to_wstring(page->_workspaceSearchResults.size()) } + (limited ? L"+" : L""));
+            if (const auto workspace = page->_FindWorkspace(workspaceId))
+            {
+                page->_restoringWorkspaceView = true;
+                const auto restore = wil::scope_exit([&]() noexcept { page->_restoringWorkspaceView = false; });
+                const auto selected = std::find(page->_workspaceSearchResults.begin(), page->_workspaceSearchResults.end(), workspace->selectedSearchResult);
+                if (selected != page->_workspaceSearchResults.end())
+                {
+                    page->WorkspaceFileSearchResults().SelectedIndex(static_cast<int32_t>(selected - page->_workspaceSearchResults.begin()));
+                }
+                page->WorkspaceFileSearchResults().UpdateLayout();
+                if (const auto scroll = workspaceScrollViewer(page->WorkspaceFileSearchResults()))
+                {
+                    scroll.ChangeView(nullptr, workspace->searchScrollOffset, nullptr, true);
+                }
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileSearchResultSelected(const IInspectable&, const SelectionChangedEventArgs&)
+    {
+        if (_restoringWorkspaceView)
+        {
+            return;
+        }
+        const auto index = WorkspaceFileSearchResults().SelectedIndex();
+        if (index >= 0 && static_cast<size_t>(index) < _workspaceSearchResults.size())
+        {
+            try
+            {
+                _OpenWorkspaceDocument(_workspaceSearchResults[index], false);
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                WorkspaceFilesStatus().Text(error.message());
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceFileSearchResultDoubleTapped(const IInspectable&, const WUX::Input::DoubleTappedRoutedEventArgs& args)
+    {
+        const auto index = WorkspaceFileSearchResults().SelectedIndex();
+        if (index >= 0 && static_cast<size_t>(index) < _workspaceSearchResults.size())
+        {
+            try
+            {
+                _OpenWorkspaceDocument(_workspaceSearchResults[index], true);
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                WorkspaceFilesStatus().Text(error.message());
+            }
+            args.Handled(true);
+        }
+    }
+
+    void TerminalPage::_OpenWorkspaceDocument(const std::filesystem::path& path, const bool pin)
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace)
+        {
+            return;
+        }
+
+        const auto normalizedPath = path.lexically_normal();
+        auto found = _workspaceDocuments.end();
+        auto preview = _workspaceDocuments.end();
+        for (auto it = _workspaceDocuments.begin(); it != _workspaceDocuments.end(); ++it)
+        {
+            if (it->workspaceId == _activeWorkspaceId)
+            {
+                if (it->path == normalizedPath)
+                {
+                    found = it;
+                    break;
+                }
+                if (!it->pinned)
+                {
+                    preview = it;
+                }
+            }
+        }
+        if (found == _workspaceDocuments.end())
+        {
+            if (preview != _workspaceDocuments.end())
+            {
+                found = preview;
+                found->path = normalizedPath;
+            }
+            else
+            {
+                _workspaceDocuments.push_back({ _activeWorkspaceId, normalizedPath, MUX::Controls::TabViewItem{}, pin });
+                found = std::prev(_workspaceDocuments.end());
+            }
+        }
+        found->pinned = found->pinned || pin;
+        workspace->selectedDocument = normalizedPath;
+        workspace->documentVisible = true;
+        workspace->preferTerminalInCompactView = false;
+        _RefreshWorkspaceDocumentTabs();
+        WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+    }
+
+    void TerminalPage::_RefreshWorkspaceDocumentTabs()
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        _updatingDocumentTabs = true;
+        WorkspaceDocumentTabs().TabItems().Clear();
+        MUX::Controls::TabViewItem selected{ nullptr };
+        for (auto& document : _workspaceDocuments)
+        {
+            if (document.workspaceId != _activeWorkspaceId)
+            {
+                continue;
+            }
+            TextBlock title{};
+            title.Text(winrt::hstring{ document.path.filename().native() });
+            title.FontStyle(document.pinned ? FontStyle::Normal : FontStyle::Italic);
+            document.tab.Header(title);
+            document.tab.IsClosable(true);
+            WorkspaceDocumentTabs().TabItems().Append(document.tab);
+            if (workspace && document.path == workspace->selectedDocument)
+            {
+                selected = document.tab;
+            }
+        }
+        if (!selected && WorkspaceDocumentTabs().TabItems().Size() > 0)
+        {
+            selected = WorkspaceDocumentTabs().TabItems().GetAt(0).as<MUX::Controls::TabViewItem>();
+            if (workspace)
+            {
+                const auto entry = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) { return value.tab == selected; });
+                if (entry != _workspaceDocuments.end())
+                {
+                    workspace->selectedDocument = entry->path;
+                }
+            }
+        }
+        WorkspaceDocumentTabs().SelectedItem(selected);
+        _updatingDocumentTabs = false;
+        _UpdateWorkspaceDocumentLayout();
+        if (!workspace || !selected || !workspace->documentVisible)
+        {
+            ++_workspaceDocumentVersion;
+            _workspacePreviewWorkspaceId.clear();
+            _workspacePreviewPath.clear();
+        }
+        else if (_restoringWorkspaceView || _workspacePreviewWorkspaceId != _activeWorkspaceId ||
+                 _workspacePreviewPath != workspace->selectedDocument)
+        {
+            if (_restoringWorkspaceView && workspace->previewPath == workspace->selectedDocument && !workspace->previewRtf.empty())
+            {
+                ++_workspaceDocumentVersion;
+                _workspacePreviewWorkspaceId = _activeWorkspaceId;
+                _workspacePreviewPath = workspace->selectedDocument;
+                const auto editor = WorkspaceDocumentEditor();
+                editor.IsReadOnly(false);
+                const auto readOnly = wil::scope_exit([&]() noexcept { editor.IsReadOnly(true); });
+                editor.Document().SetText(TextSetOptions::FormatRtf, workspace->previewRtf);
+                editor.Document().Selection().SetRange(workspace->previewSelectionStart, workspace->previewSelectionEnd);
+                WorkspaceDocumentStatus().Text(workspace->previewStatus);
+                _workspaceDocumentLineCount = workspace->previewLineCount;
+                _ApplyWorkspaceDocumentTheme();
+                _UpdateWorkspaceDocumentCaretStatus();
+                editor.UpdateLayout();
+                if (const auto scroll = workspaceScrollViewer(editor))
+                {
+                    scroll.ChangeView(nullptr, workspace->previewScrollOffset, nullptr, true);
+                }
+            }
+            else
+            {
+                _LoadWorkspaceDocument(workspace->selectedDocument);
+            }
+        }
+    }
+
+    void TerminalPage::_LoadWorkspaceDocument(const std::filesystem::path& path)
+    {
+        ++_workspaceDocumentVersion;
+        _workspacePreviewWorkspaceId = _activeWorkspaceId;
+        _workspacePreviewPath = path;
+        const auto editor = WorkspaceDocumentEditor();
+        _workspaceDocumentLineCount = 0;
+        WorkspaceDocumentLineStatus().Text(L"");
+        editor.IsReadOnly(false);
+        const auto restoreReadOnly = wil::scope_exit([&]() noexcept { editor.IsReadOnly(true); });
+        try
+        {
+            WorkspaceDocumentStatus().Text(winrt::hstring{ path.native() });
+
+            constexpr size_t maxPreviewBytes = 512 * 1024;
+            std::ifstream file{ path, std::ios::binary };
+            if (!file)
+            {
+                editor.Document().SetText(TextSetOptions::None, RS_(L"WorkspaceFileReadError"));
+                return;
+            }
+
+            std::string bytes(maxPreviewBytes + 1, '\0');
+            file.read(bytes.data(), bytes.size());
+            bytes.resize(static_cast<size_t>(file.gcount()));
+            const bool truncated = bytes.size() > maxPreviewBytes;
+            if (truncated)
+            {
+                bytes.resize(maxPreviewBytes);
+            }
+
+            winrt::hstring preview;
+            if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE)
+            {
+                std::wstring utf16;
+                for (size_t i = 2; i + 1 < bytes.size(); i += 2)
+                {
+                    utf16.push_back(static_cast<wchar_t>(static_cast<unsigned char>(bytes[i]) |
+                                                         (static_cast<unsigned char>(bytes[i + 1]) << 8)));
+                }
+                preview = winrt::hstring{ utf16 };
+            }
+            else if (std::find(bytes.begin(), bytes.end(), '\0') != bytes.end())
+            {
+                preview = RS_(L"WorkspaceBinaryFileMessage");
+            }
+            else
+            {
+                try
+                {
+                    std::string_view view{ bytes };
+                    if (view.starts_with("\xEF\xBB\xBF"))
+                    {
+                        view.remove_prefix(3);
+                    }
+                    preview = winrt::to_hstring(view);
+                }
+                catch (...)
+                {
+                    preview = RS_(L"WorkspaceUnsupportedEncodingMessage");
+                }
+            }
+            if (truncated)
+            {
+                WorkspaceDocumentStatus().Text(WorkspaceDocumentStatus().Text() + L" — " + RS_(L"WorkspacePreviewTruncatedMessage"));
+            }
+            const auto document = editor.Document();
+            document.SetText(TextSetOptions::None, preview);
+            const auto previewView = std::wstring_view{ preview };
+            const auto lineFeeds = std::count(previewView.begin(), previewView.end(), L'\n');
+            _workspaceDocumentLineCount = 1 + (lineFeeds ? lineFeeds : std::count(previewView.begin(), previewView.end(), L'\r'));
+            _ApplyWorkspaceDocumentTheme();
+            _UpdateWorkspaceDocumentCaretStatus();
+        }
+        catch (const winrt::hresult_error& error)
+        {
+            WorkspaceDocumentStatus().Text(error.message());
+        }
+    }
+
+    void TerminalPage::_ApplyWorkspaceDocumentTheme()
+    try
+    {
+        // Invalidate pending batches before changing the palette. Reformat the
+        // displayed text so cached previews retain their contents and selection.
+        const auto version = ++_workspaceDocumentVersion;
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        if (!workspace || !workspace->documentVisible || workspace->selectedDocument.empty())
+        {
+            return;
+        }
+
+        const auto editor = WorkspaceDocumentEditor();
+        const auto restoreView = workspaceDocumentFormattingScope(editor);
+        const auto document = editor.Document();
+        winrt::hstring renderedText;
+        document.GetText(TextGetOptions::None, renderedText);
+        const bool dark = editor.ActualTheme() != ElementTheme::Light;
+        const auto baseColor = dark ? Windows::UI::Color{ 255, 212, 212, 212 } : Windows::UI::Color{ 255, 32, 32, 32 };
+        document.GetRange(0, static_cast<int32_t>(renderedText.size())).CharacterFormat().ForegroundColor(baseColor);
+        auto result = WorkspaceSyntax::Highlight(std::wstring_view{ renderedText }, WorkspaceSyntax::Detect(workspace->selectedDocument));
+        const auto limitedMessage = RS_(L"WorkspaceHighlightLimitedMessage");
+        if (result.limited && std::wstring_view{ WorkspaceDocumentStatus().Text() }.find(limitedMessage) == std::wstring_view::npos)
+        {
+            WorkspaceDocumentStatus().Text(WorkspaceDocumentStatus().Text() + L" — " + limitedMessage);
+        }
+        if (!result.spans.empty())
+        {
+            _ApplyWorkspaceHighlightAsync(std::move(result.spans), dark, version);
+        }
+    }
+    CATCH_LOG()
+
+    void TerminalPage::_WorkspaceDocumentThemeChanged(const FrameworkElement&, const IInspectable&)
+    {
+        _ApplyWorkspaceDocumentTheme();
+    }
+
+    safe_void_coroutine TerminalPage::_ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, const bool dark, const uint64_t version)
+    {
+        const auto weakThis = get_weak();
+        const auto dispatcher = Dispatcher();
+        constexpr size_t batchSize = 96;
+        for (size_t start = 0; start < spans.size(); start += batchSize)
+        {
+            co_await winrt::resume_after(1ms);
+            co_await wil::resume_foreground(dispatcher);
+            const auto page = weakThis.get();
+            if (!page || page->_workspaceDocumentVersion != version)
+            {
+                co_return;
+            }
+
+            try
+            {
+                const auto editor = page->WorkspaceDocumentEditor();
+                const auto restoreView = workspaceDocumentFormattingScope(editor);
+                const auto document = editor.Document();
+                const auto end = std::min(start + batchSize, spans.size());
+                for (size_t i = start; i < end; ++i)
+                {
+                    const auto& span = spans[i];
+                    Windows::UI::Color color;
+                    switch (span.kind)
+                    {
+                    case WorkspaceSyntax::Kind::Keyword:
+                        color = dark ? Windows::UI::Color{ 255, 86, 156, 214 } : Windows::UI::Color{ 255, 0, 0, 180 };
+                        break;
+                    case WorkspaceSyntax::Kind::String:
+                        color = dark ? Windows::UI::Color{ 255, 206, 145, 120 } : Windows::UI::Color{ 255, 163, 21, 21 };
+                        break;
+                    case WorkspaceSyntax::Kind::Comment:
+                        color = dark ? Windows::UI::Color{ 255, 106, 153, 85 } : Windows::UI::Color{ 255, 0, 128, 0 };
+                        break;
+                    case WorkspaceSyntax::Kind::Number:
+                        color = dark ? Windows::UI::Color{ 255, 181, 206, 168 } : Windows::UI::Color{ 255, 9, 134, 88 };
+                        break;
+                    case WorkspaceSyntax::Kind::Heading:
+                        color = dark ? Windows::UI::Color{ 255, 86, 156, 214 } : Windows::UI::Color{ 255, 0, 0, 180 };
+                        break;
+                    case WorkspaceSyntax::Kind::Tag:
+                        color = dark ? Windows::UI::Color{ 255, 78, 201, 176 } : Windows::UI::Color{ 255, 128, 0, 128 };
+                        break;
+                    case WorkspaceSyntax::Kind::Variable:
+                        color = dark ? Windows::UI::Color{ 255, 156, 220, 254 } : Windows::UI::Color{ 255, 0, 100, 180 };
+                        break;
+                    }
+                    document.GetRange(static_cast<int32_t>(span.start), static_cast<int32_t>(span.end)).CharacterFormat().ForegroundColor(color);
+                }
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                page->WorkspaceDocumentStatus().Text(error.message());
+                co_return;
+            }
+        }
+    }
+
+    void TerminalPage::_UpdateWorkspaceDocumentCaretStatus()
+    {
+        if (_workspaceDocumentLineCount == 0)
+        {
+            WorkspaceDocumentLineStatus().Text(L"");
+            return;
+        }
+        try
+        {
+            const auto lineIndex = std::clamp(WorkspaceDocumentEditor().Document().Selection().GetIndex(TextRangeUnit::Line),
+                                              1,
+                                              static_cast<int32_t>(_workspaceDocumentLineCount));
+            WorkspaceDocumentLineStatus().Text(RS_(L"WorkspaceLinePrefix") + winrt::hstring{ std::to_wstring(lineIndex) } +
+                                               L" / " + winrt::hstring{ std::to_wstring(_workspaceDocumentLineCount) });
+        }
+        catch (const winrt::hresult_error&)
+        {
+            WorkspaceDocumentLineStatus().Text(L"");
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentCaretChanged(const IInspectable&, const RoutedEventArgs&)
+    {
+        _UpdateWorkspaceDocumentCaretStatus();
+    }
+
+    void TerminalPage::_WorkspaceTerminalGotFocus(const IInspectable&, const RoutedEventArgs& args)
+    {
+        // GotFocus is queued; ignore a notification for a target that has
+        // already lost focus before the event reaches this container.
+        if (args.OriginalSource() == WUX::Input::FocusManager::GetFocusedElement(XamlRoot()))
+        {
+            if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                workspace->preferTerminalInCompactView = true;
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentGotFocus(const IInspectable&, const RoutedEventArgs&)
+    {
+        if (WorkspaceDocumentEditor().FocusState() != FocusState::Unfocused)
+        {
+            if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                workspace->preferTerminalInCompactView = false;
+            }
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentSelectionChanged(const IInspectable&, const SelectionChangedEventArgs&)
+    {
+        if (_updatingDocumentTabs)
+        {
+            return;
+        }
+        const auto selected = WorkspaceDocumentTabs().SelectedItem().try_as<MUX::Controls::TabViewItem>();
+        const auto document = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) {
+            return value.workspaceId == _activeWorkspaceId && value.tab == selected;
+        });
+        if (document != _workspaceDocuments.end())
+        {
+            if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+            {
+                workspace->selectedDocument = document->path;
+                workspace->documentVisible = true;
+                workspace->preferTerminalInCompactView = false;
+            }
+            _UpdateWorkspaceDocumentLayout();
+            // Tab collection updates can notify selection again for the file
+            // already displayed. Preserve that preview's selection and scroll.
+            if (_workspacePreviewWorkspaceId != _activeWorkspaceId || _workspacePreviewPath != document->path)
+            {
+                _LoadWorkspaceDocument(document->path);
+            }
+            WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentTabCloseRequested(const IInspectable&, const MUX::Controls::TabViewTabCloseRequestedEventArgs& args)
+    {
+        const auto item = args.Tab();
+        const auto document = std::find_if(_workspaceDocuments.begin(), _workspaceDocuments.end(), [&](const auto& value) {
+            return value.workspaceId == _activeWorkspaceId && value.tab == item;
+        });
+        if (document == _workspaceDocuments.end())
+        {
+            return;
+        }
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && workspace->selectedDocument == document->path)
+        {
+            workspace->selectedDocument.clear();
+        }
+        _workspaceDocuments.erase(document);
+        _RefreshWorkspaceDocumentTabs();
+    }
+
+    void TerminalPage::_UpdateWorkspaceDocumentLayout()
+    {
+        const auto workspace = _FindWorkspace(_activeWorkspaceId);
+        const auto availableWidth = WorkspaceContentArea().ActualWidth();
+        const bool maximize = availableWidth > 0 && availableWidth < 520.0;
+        const bool showTerminal = workspace && maximize && workspace->preferTerminalInCompactView && _GetFocusedTab();
+        const bool showDocument = workspace && workspace->documentVisible && !workspace->selectedDocument.empty() && !showTerminal;
+        WorkspaceDocumentPanel().Visibility(showDocument ? Visibility::Visible : Visibility::Collapsed);
+        if (!showDocument)
+        {
+            WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star));
+            WorkspaceDocumentColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+            WorkspaceDocumentDivider().Visibility(Visibility::Collapsed);
+            return;
+        }
+
+        if (maximize)
+        {
+            WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+            WorkspaceDocumentColumn().Width(GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star));
+            WorkspaceDocumentDivider().Visibility(Visibility::Collapsed);
+        }
+        else
+        {
+            const auto minimumPaneWidth = std::min(260.0, availableWidth * 0.46);
+            const auto maximumDocumentWidth = std::max(minimumPaneWidth, availableWidth - minimumPaneWidth);
+            workspace->documentWidth = std::clamp(workspace->documentWidth, minimumPaneWidth, maximumDocumentWidth);
+            WorkspaceTerminalColumn().Width(GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star));
+            WorkspaceDocumentColumn().Width(GridLengthHelper::FromValueAndType(workspace->documentWidth, GridUnitType::Pixel));
+            WorkspaceDocumentDivider().Visibility(Visibility::Visible);
+        }
+    }
+
+    void TerminalPage::_WorkspaceContentSizeChanged(const IInspectable&, const WUX::SizeChangedEventArgs&)
+    {
+        _UpdateWorkspaceDocumentLayout();
+    }
+
+    void TerminalPage::_ResizeWorkspaceFilesColumn()
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+        {
+            // The sidebar's requested pixel width may have changed in this
+            // layout pass, before ActualWidth has caught up.
+            if (const auto width = SideTabLayout().ActualWidth(); width > 0)
+            {
+                const auto availableWidth = std::max(0.0, width - SideTabColumn().Width().Value);
+                const auto minimumWidth = std::min(160.0, availableWidth * 0.4);
+                const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
+                workspace->explorerWidth = std::clamp(workspace->explorerWidth, minimumWidth, maximumWidth);
+            }
+            WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(workspace->explorerWidth, GridUnitType::Pixel));
+        }
+        else
+        {
+            WorkspaceFilesColumn().Width(GridLengthHelper::FromValueAndType(0.0, GridUnitType::Pixel));
+        }
+    }
+
+    void TerminalPage::_WorkspaceFilesDividerDragDelta(const IInspectable&, const WUX::Controls::Primitives::DragDeltaEventArgs& args)
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId); workspace && !workspace->root.empty())
+        {
+            workspace->explorerWidth += args.HorizontalChange();
+            _ResizeWorkspaceFilesColumn();
+        }
+    }
+
+    void TerminalPage::_WorkspaceDocumentDividerDragDelta(const IInspectable&, const WUX::Controls::Primitives::DragDeltaEventArgs& args)
+    {
+        if (auto workspace = _FindWorkspace(_activeWorkspaceId))
+        {
+            workspace->documentWidth -= args.HorizontalChange();
+            _UpdateWorkspaceDocumentLayout();
+        }
+    }
+
+    void TerminalPage::_WorkspaceDividerDragCompleted(const IInspectable&, const WUX::Controls::Primitives::DragCompletedEventArgs&)
+    {
+        _SetSideTabDividerCursor(false);
+    }
+
+    void TerminalPage::_WorkspaceDividerPointerEntered(const IInspectable&, const WUX::Input::PointerRoutedEventArgs&)
+    {
+        _SetSideTabDividerCursor(true);
+    }
+
+    void TerminalPage::_WorkspaceDividerPointerExited(const IInspectable& sender, const WUX::Input::PointerRoutedEventArgs&)
+    {
+        if (const auto divider = sender.try_as<WUX::Controls::Primitives::Thumb>(); !divider || !divider.IsDragging())
+        {
+            _SetSideTabDividerCursor(false);
+        }
     }
 
     // Method Description:
@@ -5804,13 +7491,8 @@ namespace winrt::TerminalApp::implementation
         {
             icon.Glyph(show ? L"\xE89F" : L"\xE8A0");
         }
-        SideTabDockCard().Visibility(show ? Visibility::Collapsed : Visibility::Visible);
-        SideTabDock().Opacity(show ? 1.0 : 0.75);
-
-        // Keep the window's drag region off the sidebar toolbar (open) or
-        // just the floating toggle (collapsed).
-        static constexpr auto collapsedDockInset = 56.0;
-        TitlebarOverlayLeftInset(show ? _sideTabWidth : collapsedDockInset);
+        WorkspaceHub().Margin(ThicknessHelper::FromLengths(show ? _sideTabWidth : 0, 0, 0, 0));
+        _ResizeWorkspaceFilesColumn();
     }
 
     void TerminalPage::_ResizeSideTabColumn(double requestedWidth)
@@ -5825,7 +7507,8 @@ namespace winrt::TerminalApp::implementation
         const auto maximumWidth = std::max(minimumWidth, availableWidth - 320.0);
         _sideTabWidth = std::clamp(requestedWidth, minimumWidth, maximumWidth);
         SideTabColumn().Width(GridLengthHelper::FromValueAndType(_sideTabWidth, GridUnitType::Pixel));
-        TitlebarOverlayLeftInset(_sideTabWidth);
+        WorkspaceHub().Margin(ThicknessHelper::FromLengths(_sideTabWidth, 0, 0, 0));
+        _ResizeWorkspaceFilesColumn();
     }
 
     void TerminalPage::_SideTabLayoutSizeChanged(const IInspectable& /*sender*/, const WUX::SizeChangedEventArgs& /*e*/)
@@ -5834,23 +7517,12 @@ namespace winrt::TerminalApp::implementation
         {
             _ResizeSideTabColumn(_sideTabWidth);
         }
+        _ResizeWorkspaceFilesColumn();
     }
 
     void TerminalPage::_SideTabDockClick(const IInspectable& /*sender*/, const WUX::RoutedEventArgs& /*args*/)
     {
         _ShowSideTabOverlay(!_sideTabOverlayOpen);
-    }
-
-    void TerminalPage::_SideTabDockPointerEntered(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
-    {
-        SideTabDock().Opacity(1.0);
-    }
-
-    void TerminalPage::_SideTabDockPointerExited(const IInspectable& /*sender*/, const WUX::Input::PointerRoutedEventArgs& /*args*/)
-    {
-        // Only the floating card fades; in the open sidebar the toggle is a
-        // regular toolbar button.
-        SideTabDock().Opacity(_sideTabOverlayOpen ? 1.0 : 0.75);
     }
 
     void TerminalPage::_SideTabDividerDragStarted(const IInspectable& /*sender*/, const WUX::Controls::Primitives::DragStartedEventArgs& /*e*/)
@@ -5895,211 +7567,137 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    // Rebuild the workspace flyout contents. Called every time the flyout opens
-    // so it reflects the current set of persisted workspaces.
-    void TerminalPage::_PopulateWorkspaceFlyout()
+    void TerminalPage::_ShowWorkspaceHub()
     {
-        if (!_workspaceFlyout)
+        _RefreshWorkspaceHub();
+        WorkspaceHub().Visibility(Visibility::Visible);
+        SideTabLayout().Visibility(_tabPosition == TabPosition::Left ? Visibility::Visible : Visibility::Collapsed);
+        _UpdateTabView();
+        WorkspaceHubNewButton().Focus(FocusState::Programmatic);
+    }
+
+    void TerminalPage::_ShowWorkspaceContent()
+    {
+        if (_activeWorkspaceId.empty())
         {
+            _ShowWorkspaceHub();
             return;
         }
+        WorkspaceHub().Visibility(Visibility::Collapsed);
+        SideTabLayout().Visibility(Visibility::Visible);
+        _UpdateTabView();
+    }
 
-        _workspaceFlyout.Items().Clear();
+    void TerminalPage::_RefreshWorkspaceHub()
+    {
+        WorkspaceHubList().Items().Clear();
+        std::vector<winrt::hstring> listed;
 
-        // --- "Name / Rename this window" ---
-        {
-            MenuFlyoutItem item{};
-            item.Text(_WindowProperties.WindowName().empty() ? RS_(L"NameThisWindowMenuItem") : RS_(L"RenameThisWindowMenuItem"));
-
-            auto iconElement = UI::IconPathConverter::IconWUX(L"\uE8AC"); // Rename glyph
-            Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-            item.Icon(iconElement);
-
-            item.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-                if (auto page{ weakThis.get() })
-                {
-                    page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::OpenWindowRenamer, nullptr });
-                }
-            });
-            _workspaceFlyout.Items().Append(item);
-        }
-
-        // --- Gather open window info first so we can filter workspaces ---
-        const auto windowListReq{ winrt::make<WindowListRequest>() };
-        RequestWindowList.raise(*this, windowListReq);
-        const auto windowEntries = windowListReq.Entries();
-
-        std::set<winrt::hstring> openWindowNames;
-        if (windowEntries)
-        {
-            for (const auto& entry : windowEntries)
+        const auto append = [this, &listed](const winrt::hstring& id, const winrt::hstring& title, const winrt::hstring& detail) {
+            if (std::find(listed.begin(), listed.end(), id) != listed.end())
             {
-                const auto& name = entry.Name();
-                if (!name.empty())
-                {
-                    openWindowNames.emplace(name);
-                }
+                return;
+            }
+            listed.push_back(id);
+            Grid row{};
+            ColumnDefinition openColumn{};
+            openColumn.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+            row.ColumnDefinitions().Append(openColumn);
+            ColumnDefinition buttonColumn{};
+            buttonColumn.Width(GridLengthHelper::Auto());
+            row.ColumnDefinitions().Append(buttonColumn);
+            row.Margin(ThicknessHelper::FromLengths(8, 2, 8, 2));
+
+            StackPanel content{};
+            TextBlock name{};
+            name.Text(title);
+            name.FontSize(16);
+            name.FontWeight(FontWeights::SemiBold());
+            content.Children().Append(name);
+            TextBlock subtitle{};
+            subtitle.Text(detail);
+            subtitle.Opacity(0.7);
+            subtitle.TextTrimming(TextTrimming::CharacterEllipsis);
+            content.Children().Append(subtitle);
+            Button open{};
+            open.Content(content);
+            open.Tag(winrt::box_value(id));
+            open.HorizontalAlignment(HorizontalAlignment::Stretch);
+            open.HorizontalContentAlignment(HorizontalAlignment::Left);
+            open.Click({ this, &TerminalPage::_WorkspaceHubOpenClick });
+            row.Children().Append(open);
+
+            Button remove{};
+            remove.Content(winrt::box_value(RS_(L"WorkspaceHubDeleteButton")));
+            remove.Tag(winrt::box_value(id));
+            remove.Margin(ThicknessHelper::FromLengths(8, 0, 0, 0));
+            remove.VerticalAlignment(VerticalAlignment::Center);
+            remove.Click({ this, &TerminalPage::_WorkspaceHubDeleteClick });
+            Grid::SetColumn(remove, 1);
+            row.Children().Append(remove);
+            WorkspaceHubList().Items().Append(row);
+        };
+
+        const auto state = ApplicationState::SharedInstance();
+        for (const auto& id : state.AllRecentWorkspaces())
+        {
+            if (const auto workspace = _FindWorkspace(id))
+            {
+                const auto detail = workspace->root.empty() ? RS_(L"WorkspaceHubRunningStatus") :
+                                    winrt::hstring{ workspace->root.native() };
+                append(id, workspace->displayName, detail);
+            }
+            else
+            {
+                const std::filesystem::path path{ std::wstring_view{ id } };
+                const auto folder = path.is_absolute();
+                const auto title = folder && !path.filename().empty() ? winrt::hstring{ path.filename().native() } : id;
+                append(id, title, folder ? id : RS_(L"WorkspaceHubSavedStatus"));
             }
         }
 
-        // --- Saved workspaces section (only those not currently open) ---
-        // Collect workspace names that aren't currently open so we can show
-        // them both as top-level "open" items and inside the delete sub-menu.
-        const auto workspaces = ApplicationState::SharedInstance().AllPersistedWorkspaces();
-        if (workspaces && workspaces.Size() > 0)
+        WorkspaceHubEmptyText().Visibility(listed.empty() ? Visibility::Visible : Visibility::Collapsed);
+        WorkspaceHubBackButton().IsEnabled(_FindWorkspace(_activeWorkspaceId) != nullptr);
+    }
+
+    void TerminalPage::_WorkspaceHomeClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _ShowWorkspaceHub();
+    }
+
+    void TerminalPage::_WorkspaceHubBackClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _ShowWorkspaceContent();
+        _FocusCurrentTab(true);
+    }
+
+    void TerminalPage::_WorkspaceHubNewClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _CreateNamedWorkspace();
+    }
+
+    void TerminalPage::_WorkspaceHubFolderClick(const IInspectable&, const RoutedEventArgs&)
+    {
+        _PickWorkspaceFolder();
+    }
+
+    void TerminalPage::_WorkspaceHubOpenClick(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        if (const auto button = sender.try_as<Button>())
         {
-            bool addedSeparator = false;
-
-            for (const auto& pair : workspaces)
-            {
-                const auto name = pair.Key();
-
-                // Skip workspaces that correspond to a currently-open window.
-                if (openWindowNames.contains(name))
-                {
-                    continue;
-                }
-
-                if (!addedSeparator)
-                {
-                    _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
-                    addedSeparator = true;
-                }
-
-                MenuFlyoutItem item{};
-                item.Text(name);
-
-                auto iconElement = UI::IconPathConverter::IconWUX(L"\uE8F1"); // SwitchApps glyph
-                Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                item.Icon(iconElement);
-
-                item.Click([weakThis{ get_weak() }, name](auto&&, auto&&) {
-                    if (auto page{ weakThis.get() })
-                    {
-                        page->_OpenWorkspaceWindow(name);
-                    }
-                });
-
-                // Right-click to delete: attach a context flyout with a
-                // "Delete workspace?" item that opens a confirmation dialog.
-                {
-                    WUX::Controls::MenuFlyout deleteFlyout{};
-                    deleteFlyout.Placement(WUX::Controls::Primitives::FlyoutPlacementMode::BottomEdgeAlignedRight);
-
-                    WUX::Controls::MenuFlyoutItem deleteItem{};
-                    deleteItem.Text(RS_(L"DeleteWorkspaceMenuItem"));
-
-                    auto trashIcon = UI::IconPathConverter::IconWUX(L"\xE74D"); // Delete  glyph
-
-                    deleteItem.Click([weakThis{ get_weak() }, name](auto&&, auto&&) -> safe_void_coroutine {
-                        auto page{ weakThis.get() };
-                        if (!page)
-                        {
-                            co_return;
-                        }
-
-                        // Build and show a confirmation ContentDialog.
-                        ContentDialog dialog{};
-                        dialog.Title(winrt::box_value(winrt::hstring{ RS_fmt(L"ConfirmDeleteWorkspaceTitle", name) }));
-                        dialog.Content(winrt::box_value(winrt::hstring{ RS_fmt(L"ConfirmDeleteWorkspaceBody", name) }));
-                        dialog.PrimaryButtonText(RS_(L"ConfirmDeleteWorkspaceDelete"));
-                        dialog.CloseButtonText(RS_(L"ConfirmDeleteWorkspaceCancel"));
-                        dialog.DefaultButton(ContentDialogButton::Close);
-
-                        if (auto presenter{ page->_dialogPresenter.get() })
-                        {
-                            const auto result = co_await presenter.ShowDialog(dialog);
-                            // Re-check after co_await
-                            page = weakThis.get();
-                            if (!page)
-                            {
-                                co_return;
-                            }
-                            if (result == ContentDialogResult::Primary)
-                            {
-                                ApplicationState::SharedInstance().RemoveWorkspace(name);
-                                page->_PopulateWorkspaceFlyout();
-                            }
-                        }
-                    });
-
-                    deleteFlyout.Items().Append(deleteItem);
-                    WUX::Controls::Primitives::FlyoutBase::SetAttachedFlyout(item, deleteFlyout);
-                    item.ContextRequested([item](auto&&, auto&&) {
-                        WUX::Controls::Primitives::FlyoutBase::ShowAttachedFlyout(item);
-                    });
-                }
-
-                _workspaceFlyout.Items().Append(item);
-            }
+            _OpenWorkspace(winrt::unbox_value<winrt::hstring>(button.Tag()));
         }
+    }
 
-        // --- Open windows section ---
-        if (windowEntries && windowEntries.Size() > 0)
+    void TerminalPage::_WorkspaceHubDeleteClick(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        if (const auto button = sender.try_as<Button>())
         {
-            _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
-
-            const auto thisWindowId = _WindowProperties.WindowId();
-
-            for (const auto& entry : windowEntries)
-            {
-                const auto id = entry.Id();
-                const auto& name = entry.Name();
-
-                winrt::hstring displayText;
-                if (name.empty())
-                {
-                    displayText = winrt::hstring{ RS_fmt(L"WindowListUnnamedEntry", id) };
-                }
-                else
-                {
-                    displayText = winrt::hstring{ fmt::format(FMT_COMPILE(L"#{}: {}"), id, name) };
-                }
-
-                MenuFlyoutItem item{};
-                item.Text(displayText);
-
-                if (id == thisWindowId)
-                {
-                    auto iconElement = UI::IconPathConverter::IconWUX(L"\uE73E"); // CheckMark glyph
-                    Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                    item.Icon(iconElement);
-                    item.IsEnabled(false);
-                }
-                else
-                {
-                    auto iconElement = UI::IconPathConverter::IconWUX(L"\uE737"); // ChromeRestore glyph
-                    Automation::AutomationProperties::SetAccessibilityView(iconElement, Automation::Peers::AccessibilityView::Raw);
-                    item.Icon(iconElement);
-
-                    item.Click([weakThis{ get_weak() }, id](auto&&, auto&&) {
-                        if (auto page{ weakThis.get() })
-                        {
-                            page->SummonWindowByIdRequested.raise(*page, winrt::make<SummonWindowByIdRequestedArgs>(id));
-                        }
-                    });
-                }
-
-                _workspaceFlyout.Items().Append(item);
-            }
+            const auto id = winrt::unbox_value<winrt::hstring>(button.Tag());
+            auto state = ApplicationState::SharedInstance();
+            state.ForgetRecentWorkspace(id);
+            _RefreshWorkspaceHub();
         }
-
-        _workspaceFlyout.Items().Append(MenuFlyoutSeparator{});
-
-        MenuFlyoutItem newWindowItem{};
-        newWindowItem.Text(RS_(L"NewWindowMenuItem"));
-
-        auto newWindowIcon = UI::IconPathConverter::IconWUX(L"\uE78B");
-        Automation::AutomationProperties::SetAccessibilityView(newWindowIcon, Automation::Peers::AccessibilityView::Raw);
-        newWindowItem.Icon(newWindowIcon);
-
-        newWindowItem.Click([weakThis{ get_weak() }](auto&&, auto&&) {
-            if (auto page{ weakThis.get() })
-            {
-                page->_actionDispatch->DoAction(ActionAndArgs{ ShortcutAction::NewWindow, nullptr });
-            }
-        });
-        _workspaceFlyout.Items().Append(newWindowItem);
     }
 
     // Handler for our WindowProperties's PropertyChanged event. We'll use this
@@ -6111,9 +7709,8 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        // Keep the workspace dropdown label in sync with the window name.
-        // Use raw WindowName() so clearing the name hides the text on the
-        // horizontal strip. The sidebar caption falls back to the window id.
+        // Window names remain supported by the host and CLI. The visible label
+        // follows the active workspace instead.
         _UpdateWorkspaceLabels();
 
         // DON'T display the confirmation if this is the name we were

@@ -837,8 +837,146 @@
   <data name="ElevationShield.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>This Terminal window is running as administrator</value>
   </data>
+  <data name="WorkspaceHomeButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
+  <data name="WorkspaceHomeButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
   <data name="WorkspaceDropdown.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
     <value>Workspaces</value>
+  </data>
+  <data name="UntitledWorkspaceName" xml:space="preserve">
+    <value>Untitled workspace</value>
+  </data>
+  <data name="WorkspaceHubTitle.Text" xml:space="preserve">
+    <value>Workspaces</value>
+  </data>
+  <data name="WorkspaceHubDescription.Text" xml:space="preserve">
+    <value>Open a workspace to browse files and start terminals. Your open terminals keep running while you visit this page.</value>
+  </data>
+  <data name="WorkspaceHubNewButton.Content" xml:space="preserve">
+    <value>New workspace</value>
+  </data>
+  <data name="WorkspaceHubFolderButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="WorkspaceHubPathButton.Content" xml:space="preserve">
+    <value>Enter folder path</value>
+  </data>
+  <data name="WorkspaceHubListHeader.Text" xml:space="preserve">
+    <value>Available workspaces</value>
+  </data>
+  <data name="WorkspaceHubEmptyText.Text" xml:space="preserve">
+    <value>No workspaces yet. Create one or open a folder to begin.</value>
+  </data>
+  <data name="WorkspaceHubBackButton.Content" xml:space="preserve">
+    <value>Back to current workspace</value>
+  </data>
+  <data name="WorkspaceHubRunningStatus" xml:space="preserve">
+    <value>Terminal session</value>
+  </data>
+  <data name="WorkspaceHubSavedStatus" xml:space="preserve">
+    <value>Saved workspace</value>
+  </data>
+  <data name="WorkspaceHubDeleteButton" xml:space="preserve">
+    <value>Remove from recent</value>
+  </data>
+  <data name="DefaultWorkspaceName" xml:space="preserve">
+    <value>Default</value>
+  </data>
+  <data name="NewWorkspaceMenuItem" xml:space="preserve">
+    <value>New workspace...</value>
+  </data>
+  <data name="OpenFolderWorkspaceMenuItem" xml:space="preserve">
+    <value>Open folder as workspace...</value>
+  </data>
+  <data name="EnterFolderPathMenuItem" xml:space="preserve">
+    <value>Enter folder path...</value>
+  </data>
+  <data name="EnterFolderPathTitle" xml:space="preserve">
+    <value>Open folder workspace</value>
+  </data>
+  <data name="OpenFolderButton" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="FolderPathPlaceholder" xml:space="preserve">
+    <value>Absolute folder path</value>
+  </data>
+  <data name="InvalidFolderPathTitle" xml:space="preserve">
+    <value>Folder not found</value>
+  </data>
+  <data name="InvalidFolderPathMessage" xml:space="preserve">
+    <value>Enter an existing absolute folder path.</value>
+  </data>
+  <data name="NewWorkspaceTitle" xml:space="preserve">
+    <value>New workspace</value>
+  </data>
+  <data name="CreateWorkspaceButton" xml:space="preserve">
+    <value>Create</value>
+  </data>
+  <data name="CancelWorkspaceButton" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="WorkspaceNamePlaceholder" xml:space="preserve">
+    <value>Workspace name</value>
+  </data>
+  <data name="WorkspaceFolderReadError" xml:space="preserve">
+    <value>Could not read this folder.</value>
+  </data>
+  <data name="WorkspaceFileReadError" xml:space="preserve">
+    <value>Could not read this file.</value>
+  </data>
+  <data name="WorkspaceBinaryFileMessage" xml:space="preserve">
+    <value>Binary files cannot be previewed.</value>
+  </data>
+  <data name="WorkspaceUnsupportedEncodingMessage" xml:space="preserve">
+    <value>This text encoding cannot be previewed.</value>
+  </data>
+  <data name="WorkspacePreviewTruncatedMessage" xml:space="preserve">
+    <value>Showing the first 512 KB.</value>
+  </data>
+  <data name="WorkspaceHighlightLimitedMessage" xml:space="preserve">
+    <value>Syntax color is limited in large files.</value>
+  </data>
+  <data name="WorkspaceFilesShownPrefix" xml:space="preserve">
+    <value>Items shown in folder: </value>
+  </data>
+  <data name="WorkspaceFileSearchBox.PlaceholderText" xml:space="preserve">
+    <value>Find a file in this workspace</value>
+  </data>
+  <data name="WorkspaceSearchRunning" xml:space="preserve">
+    <value>Searching files...</value>
+  </data>
+  <data name="WorkspaceSearchResultsPrefix" xml:space="preserve">
+    <value>Matching files: </value>
+  </data>
+  <data name="WorkspaceLinePrefix" xml:space="preserve">
+    <value>Line </value>
+  </data>
+  <data name="WorkspaceDocumentMaximize" xml:space="preserve">
+    <value>Expand</value>
+  </data>
+  <data name="WorkspaceDocumentRestore" xml:space="preserve">
+    <value>Restore</value>
+  </data>
+  <data name="WorkspaceDocumentMaximizeButton.Content" xml:space="preserve">
+    <value>Expand</value>
+  </data>
+  <data name="WorkspaceFilesHeader.Text" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="WorkspaceChangeFolderButton.Content" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="WorkspaceUpButton.Content" xml:space="preserve">
+    <value>Up</value>
+  </data>
+  <data name="WorkspaceRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="WorkspaceClosePreviewButton.Content" xml:space="preserve">
+    <value>Hide</value>
   </data>
   <data name="CommandPalette_MatchesAvailable" xml:space="preserve">
     <value>Suggestions found: {0}</value>
@@ -1005,5 +1143,32 @@
 For example, 'wt -p "Ubuntu" -d C:\' is equivalent to 'wt new-tab -p "Ubuntu" -d C:\'.
 For all available options, run 'wt new-tab --help'.</value>
     <comment>{Locked="wt","new-tab","-p","-d","--help"}</comment>
+  </data>
+  <data name="ActivateWorkspaceButton" xml:space="preserve">
+    <value>Switch to workspace</value>
+  </data>
+  <data name="CloseWorkspaceButton" xml:space="preserve">
+    <value>Close workspace</value>
+  </data>
+  <data name="CloseWorkspaceWarning" xml:space="preserve">
+    <value>Closing this workspace will terminate all of its terminals, including read-only panes, and close its file previews. Continue?</value>
+  </data>
+  <data name="WorkspaceSidebarToggle.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>Toggle workspace sidebar</value>
+  </data>
+  <data name="WorkspaceSidebarToggle.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>Toggle workspace sidebar</value>
+  </data>
+  <data name="WorkspaceOpenFolderButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="WorkspaceOpenFolderButton.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
+    <value>Switch workspace</value>
+  </data>
+  <data name="WorkspaceSwitcher.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>Switch workspace</value>
   </data>
 </root>

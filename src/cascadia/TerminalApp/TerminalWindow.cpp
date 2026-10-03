@@ -170,9 +170,9 @@ namespace winrt::TerminalApp::implementation
         {
             // layout will only ever be non-null if there were >0 tabs persisted in
             // .TabLayout(). We can re-evaluate that as a part of TODO: GH#12633
-            _root->SetStartupActions(wil::to_vector(layout.TabLayout()));
+            _root->SetStartupActions(wil::to_vector(layout.TabLayout()), true);
         }
-        else if (_appArgs)
+        else if (_appArgs && _hasCommandLineArguments)
         {
             _root->SetStartupActions(_appArgs->ParsedArgs().GetStartupActions());
         }
@@ -199,9 +199,21 @@ namespace winrt::TerminalApp::implementation
         //
         // Obviously, don't use the `startupActions` from the settings in the
         // case of a tear-out / reattach. GH#16050
+        const auto explicitlyOpensWorkspace = std::any_of(_settingsStartupArgs.begin(), _settingsStartupArgs.end(), [](const auto& action) {
+            if (action.Action() == ShortcutAction::OpenWorkspace)
+            {
+                if (const auto args = action.Args().try_as<OpenWorkspaceArgs>())
+                {
+                    return !args.Name().empty();
+                }
+            }
+            return false;
+        });
         if (!_hasCommandLineArguments &&
             _initialContentArgs.empty() &&
-            _gotSettingsStartupActions)
+            !LoadPersistedLayout() &&
+            _gotSettingsStartupActions &&
+            (!_WindowProperties->WindowName().empty() || explicitlyOpensWorkspace))
         {
             _root->SetStartupActions(_settingsStartupArgs);
         }
@@ -368,6 +380,13 @@ namespace winrt::TerminalApp::implementation
         }
 
         s_activeDialog = dialog;
+        // Native child surfaces must yield before a XAML modal is displayed.
+        // Restore them on cancellation and exceptions as well as normal close.
+        const auto restoreDialogState = wil::scope_exit([weak]() {
+            s_activeDialog = nullptr;
+            if (const auto self = weak.get()) self->DialogVisibilityChanged.raise(*self, false);
+        });
+        DialogVisibilityChanged.raise(*this, true);
 
         // IMPORTANT: This is necessary as documented in the ContentDialog MSDN docs.
         // Since we're hosting the dialog in a Xaml island, we need to connect it to the
@@ -409,7 +428,6 @@ namespace winrt::TerminalApp::implementation
             result = co_await dialog.ShowAsync(Controls::ContentDialogPlacement::Popup);
         }
 
-        s_activeDialog = nullptr;
         co_return result;
     }
 
@@ -560,18 +578,28 @@ namespace winrt::TerminalApp::implementation
         // --focusMode on the commandline here, and the mode in the settings.
         // Below, we'll also account for if focus mode was persisted into the
         // session for restoration.
-        bool focusMode = _appArgs && _appArgs->ParsedArgs().GetLaunchMode().value_or(_currentWindowSettings().LaunchMode()) == LaunchMode::FocusMode;
+        const auto launchMode = _appArgs ? _appArgs->ParsedArgs().GetLaunchMode().value_or(_currentWindowSettings().LaunchMode()) : _currentWindowSettings().LaunchMode();
+        bool focusMode = WI_IsFlagSet(launchMode, LaunchMode::FocusMode);
+        bool multipleTabs = false;
+        bool restoredSize = false;
 
         const auto scale = static_cast<float>(dpi) / static_cast<float>(USER_DEFAULT_SCREEN_DPI);
         if (const auto layout = LoadPersistedLayout())
         {
+            if (const auto actions = layout.TabLayout())
+            {
+                multipleTabs = std::count_if(actions.begin(), actions.end(), [](const auto& action) {
+                                   return action.Action() == ShortcutAction::NewTab;
+                               }) > 1;
+            }
             if (layout.LaunchMode())
             {
-                focusMode = layout.LaunchMode().Value() == LaunchMode::FocusMode;
+                focusMode = WI_IsFlagSet(layout.LaunchMode().Value(), LaunchMode::FocusMode);
             }
 
             if (layout.InitialSize())
             {
+                restoredSize = true;
                 proposedSize = layout.InitialSize().Value();
                 // The size is saved as a non-scaled real pixel size,
                 // so we need to scale it appropriately.
@@ -582,6 +610,7 @@ namespace winrt::TerminalApp::implementation
 
         if ((_appArgs && _appArgs->ParsedArgs().GetSize().has_value()) || (proposedSize.Width == 0 && proposedSize.Height == 0))
         {
+            restoredSize = false;
             // Use the default profile to determine how big of a window we need.
             const auto settings{ Settings::TerminalSettings::CreateWithNewTerminalArgs(_settings, _currentWindowSettings(), nullptr) };
 
@@ -604,9 +633,11 @@ namespace winrt::TerminalApp::implementation
             };
         }
 
-        // GH#2061 - If the global setting "Always show tab bar" is
-        // set or if "Show tabs in title bar" is set, then we'll need to add
-        // the height of the tab bar here.
+        // Reserve the native titlebar even when its workspace header is hidden.
+        // Otherwise include the header whenever settings keep it visible.
+        const auto theme = _settings.GlobalSettings().CurrentTheme(_currentWindowSettings());
+        const bool showWorkspacesButton = !theme || !theme.Window() || theme.Window().ShowWorkspacesButton();
+        const bool sideTabs = _currentWindowSettings().TabPosition() == TabPosition::Left;
         if (_currentWindowSettings().ShowTabsInTitlebar() && !focusMode)
         {
             // In the past, we used to actually instantiate a TitlebarControl
@@ -625,16 +656,14 @@ namespace winrt::TerminalApp::implementation
             static constexpr auto titlebarHeight = 40;
             proposedSize.Height += (titlebarHeight)*scale;
         }
-        else if (_currentWindowSettings().AlwaysShowTabs() && !focusMode)
+        else if ((_currentWindowSettings().AlwaysShowTabs() || showWorkspacesButton || multipleTabs) && !focusMode)
         {
-            // Same comment as above, but with a TabRowControl.
-            //
-            // A note from before: For whatever reason, there's about 10px of
-            // unaccounted-for space in the application. I couldn't tell you
-            // where these 10px are coming from, but they need to be included in
-            // this math.
-            static constexpr auto tabRowHeight = 32;
-            proposedSize.Height += (tabRowHeight + 10) * scale;
+            // A persisted workspace size excludes exactly the 32-DIP tab row
+            // (or the 40-DIP side-tab header). Retain the legacy 10-DIP margin
+            // only when sizing a fresh terminal from its row/column settings.
+            const auto headerHeight = sideTabs ? 40 : restoredSize ? 32 :
+                                                                     42;
+            proposedSize.Height += headerHeight * scale;
         }
 
         // With side tabs, the tab strip floats over the content in a
@@ -950,15 +979,6 @@ namespace winrt::TerminalApp::implementation
         return _root ? _root->TitlebarBrush() : nullptr;
     }
 
-    bool TerminalWindow::TitlebarOverlayMode()
-    {
-        return _root ? _root->TitlebarOverlayMode() : false;
-    }
-
-    double TerminalWindow::TitlebarOverlayLeftInset()
-    {
-        return _root ? _root->TitlebarOverlayLeftInset() : 0.0;
-    }
     winrt::Windows::UI::Xaml::Media::Brush TerminalWindow::FrameBrush()
     {
         return _root ? _root->FrameBrush() : nullptr;
@@ -1159,6 +1179,37 @@ namespace winrt::TerminalApp::implementation
             {
                 auto layout = layouts.GetAt(i);
 
+                // Named windows persist a stub pointing to their full layout.
+                // Resolve it before reading window bounds and launch mode, and
+                // replay its window actions instead of importing it in-page.
+                if (const auto actions = layout.TabLayout(); actions && actions.Size() == 1)
+                {
+                    const auto action = actions.GetAt(0);
+                    if (action.Action() == ShortcutAction::OpenWorkspace)
+                    {
+                        if (const auto args = action.Args().try_as<OpenWorkspaceArgs>(); args && !args.Name().empty())
+                        {
+                            if (const auto workspace = ApplicationState::SharedInstance().TakeWorkspace(args.Name()))
+                            {
+                                if (const auto workspaceActions = workspace.TabLayout(); workspaceActions && workspaceActions.Size() > 0)
+                                {
+                                    auto replay = wil::to_vector(workspaceActions);
+                                    if (std::none_of(replay.begin(), replay.end(), [](const auto& entry) {
+                                            return entry.Action() == ShortcutAction::OpenWorkspace;
+                                        }))
+                                    {
+                                        // Legacy layouts only rename the physical window.
+                                        // Retain the stub's name as the owner of their tabs.
+                                        replay.insert(replay.begin(), ActionAndArgs{ ShortcutAction::OpenWorkspace, OpenWorkspaceArgs{ args.Name() } });
+                                        workspace.TabLayout(winrt::single_threaded_vector<ActionAndArgs>(std::move(replay)));
+                                    }
+                                }
+                                layout = workspace;
+                            }
+                        }
+                    }
+                }
+
                 // TODO: GH#12633: Right now, we're manually making sure that we
                 // have at least one tab to restore. If we ever want to come
                 // back and make it so that you can persist position and size,
@@ -1202,6 +1253,14 @@ namespace winrt::TerminalApp::implementation
             return _root->FocusTab(tab);
         }
         return false;
+    }
+
+    void TerminalWindow::FocusActiveTerminal()
+    {
+        if (_root)
+        {
+            _root->FocusActiveTerminal();
+        }
     }
 
     void TerminalWindow::WindowName(const winrt::hstring& name)

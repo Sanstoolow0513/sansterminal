@@ -19,6 +19,9 @@
 #include "Toast.h"
 
 #include "WindowsPackageManagerFactory.h"
+#include "WorkspaceSyntaxHighlighter.h"
+
+#include <filesystem>
 
 #define DECLARE_ACTION_HANDLER(action) void _Handle##action(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::ActionEventArgs& args);
 
@@ -189,7 +192,7 @@ namespace winrt::TerminalApp::implementation
         void Maximized(bool newMaximized);
         void RequestSetMaximized(bool newMaximized);
 
-        void SetStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions);
+        void SetStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions, bool restoreLayout = false);
         void SetStartupConnection(winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection connection);
 
         static std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> ConvertExecuteCommandlineToActions(const Microsoft::Terminal::Settings::Model::ExecuteCommandlineArgs& args);
@@ -206,7 +209,8 @@ namespace winrt::TerminalApp::implementation
 
         safe_void_coroutine ProcessStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions,
                                                   const winrt::hstring cwd = winrt::hstring{},
-                                                  const winrt::hstring env = winrt::hstring{});
+                                                  const winrt::hstring env = winrt::hstring{},
+                                                  bool restoreLayout = false);
         safe_void_coroutine CreateTabFromConnection(winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection connection);
 
         TerminalApp::WindowProperties WindowProperties() const noexcept { return _WindowProperties; };
@@ -217,6 +221,7 @@ namespace winrt::TerminalApp::implementation
         void OpenSettingsUI();
         void WindowActivated(const bool activated);
         bool FocusTab(const winrt::TerminalApp::Tab& tab);
+        void FocusActiveTerminal();
 
         bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
@@ -259,8 +264,6 @@ namespace winrt::TerminalApp::implementation
         til::typed_event<IInspectable, winrt::TerminalApp::WindowRequestedArgs> RequestNewWindow;
 
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, TitlebarBrush, PropertyChanged.raise, nullptr);
-        WINRT_OBSERVABLE_PROPERTY(bool, TitlebarOverlayMode, PropertyChanged.raise, false);
-        WINRT_OBSERVABLE_PROPERTY(double, TitlebarOverlayLeftInset, PropertyChanged.raise, 0.0);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Media::Brush, FrameBrush, PropertyChanged.raise, nullptr);
 
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, SavedActionName, PropertyChanged.raise, L"");
@@ -281,9 +284,131 @@ namespace winrt::TerminalApp::implementation
         TerminalApp::TabRowControl _tabRow{ nullptr };
         Windows::UI::Xaml::Controls::Grid _tabContent{ nullptr };
         Microsoft::UI::Xaml::Controls::SplitButton _newTabButton{ nullptr };
-        Windows::UI::Xaml::Controls::MenuFlyout _workspaceFlyout{ nullptr };
-        Windows::UI::Xaml::Controls::Button _workspaceDropdown{ nullptr };
+        Windows::UI::Xaml::Controls::Button _workspaceHomeButton{ nullptr };
+        struct WorkspaceFileEntry
+        {
+            Microsoft::UI::Xaml::Controls::TreeViewNode node{ nullptr };
+            std::filesystem::path path;
+            bool isDirectory;
+        };
+        struct WorkspaceSession
+        {
+            winrt::hstring id;
+            winrt::hstring displayName;
+            std::filesystem::path root;
+            std::filesystem::path currentDirectory;
+            winrt::TerminalApp::Tab lastFocused{ nullptr };
+            std::filesystem::path selectedDocument;
+            double explorerWidth{ 250.0 };
+            double documentWidth{ 520.0 };
+            bool documentVisible{ false };
+            bool preferTerminalInCompactView{ false };
+            Microsoft::UI::Xaml::Controls::TreeViewNode navigationNode{ nullptr };
+            std::vector<WorkspaceFileEntry> fileEntries;
+            Microsoft::UI::Xaml::Controls::TreeViewNode fileRoot{ nullptr };
+            Microsoft::UI::Xaml::Controls::TreeViewNode selectedFile{ nullptr };
+            winrt::hstring searchQuery;
+            std::filesystem::path selectedSearchResult;
+            winrt::hstring treeStatus;
+            double treeScrollOffset{ 0.0 };
+            double searchScrollOffset{ 0.0 };
+            winrt::hstring previewRtf;
+            winrt::hstring previewStatus;
+            std::filesystem::path previewPath;
+            int32_t previewSelectionStart{ 0 };
+            int32_t previewSelectionEnd{ 0 };
+            double previewScrollOffset{ 0.0 };
+            size_t previewLineCount{ 0 };
+        };
+        struct WorkspaceNavigationEntry
+        {
+            winrt::TerminalApp::Tab tab{ nullptr };
+            Microsoft::UI::Xaml::Controls::TreeViewNode node{ nullptr };
+        };
+        struct WorkspaceDocument
+        {
+            winrt::hstring workspaceId;
+            std::filesystem::path path;
+            Microsoft::UI::Xaml::Controls::TabViewItem tab{ nullptr };
+            bool pinned{ false };
+        };
+        std::vector<WorkspaceSession> _workspaces;
+        std::vector<WorkspaceNavigationEntry> _workspaceNavigationEntries;
+        std::vector<std::pair<winrt::TerminalApp::Tab, winrt::hstring>> _tabWorkspaces;
+        std::vector<WorkspaceFileEntry> _workspaceFileEntries;
+        std::vector<std::filesystem::path> _workspaceSearchResults;
+        std::vector<WorkspaceDocument> _workspaceDocuments;
+        winrt::hstring _activeWorkspaceId;
+        bool _changingWorkspace{ false };
+        bool _updatingDocumentTabs{ false };
+        bool _restoringWorkspaceView{ false };
+        uint64_t _workspaceSearchVersion{ 0 };
+        uint64_t _workspaceDocumentVersion{ 0 };
+        winrt::hstring _workspacePreviewWorkspaceId;
+        std::filesystem::path _workspacePreviewPath;
+        size_t _workspaceDocumentLineCount{ 0 };
+        bool _hasStartupActions{ false };
+        bool _startupActionsRestoreLayout{ false };
+        bool _restoringLayout{ false };
+        WorkspaceSession* _FindWorkspace(const winrt::hstring& id);
+        winrt::hstring _WorkspaceForTab(const winrt::TerminalApp::Tab& tab) const;
+        bool _IsTabInActiveWorkspace(const winrt::TerminalApp::Tab& tab) const;
+        void _EnsureWorkspaceForTerminal();
+        void _SwitchWorkspace(const winrt::hstring& id, bool createTabIfEmpty = true);
+        void _OpenWorkspace(const winrt::hstring& id);
+        safe_void_coroutine _CreateNamedWorkspace();
+        safe_void_coroutine _PickWorkspaceFolder();
+        void _ShowWorkspaceHub();
+        void _ShowWorkspaceContent();
+        void _RefreshWorkspaceHub();
+        void _WorkspaceHomeClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubBackClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubNewClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubFolderClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubOpenClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceHubDeleteClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _UpdateWorkspaceTabVisibility();
+        void _RefreshWorkspaceNavigation();
+        void _SyncWorkspaceNavigationSelection();
+        void _WorkspaceNavigationRowLoaded(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceNavigationRowUnloaded(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceNavigationInvoked(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewItemInvokedEventArgs& args);
+        Windows::Foundation::IAsyncAction _CloseWorkspace(winrt::hstring id);
+        void _SaveWorkspaceViewState();
+        void _UpdateWorkspaceFilesUI();
+        void _RefreshWorkspaceFiles();
+        void _PopulateWorkspaceFileNode(const Microsoft::UI::Xaml::Controls::TreeViewNode& node);
+        Microsoft::UI::Xaml::Controls::TreeViewNode _CreateWorkspaceFileNode(const std::filesystem::path& path, bool isDirectory);
+        const WorkspaceFileEntry* _FindWorkspaceFileNode(const Microsoft::UI::Xaml::Controls::TreeViewNode& node) const;
+        void _WorkspaceFileInvoked(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewItemInvokedEventArgs& args);
+        void _WorkspaceFileExpanding(const Microsoft::UI::Xaml::Controls::TreeView& sender, const Microsoft::UI::Xaml::Controls::TreeViewExpandingEventArgs& args);
+        void _WorkspaceFileDoubleTapped(const IInspectable& sender, const Windows::UI::Xaml::Input::DoubleTappedRoutedEventArgs& args);
+        void _WorkspaceFileSearchChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::TextChangedEventArgs& args);
+        safe_void_coroutine _SearchWorkspaceFilesAsync(winrt::hstring workspaceId, std::filesystem::path root, winrt::hstring query, uint64_t version);
+        void _WorkspaceFileSearchResultSelected(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
+        void _WorkspaceFileSearchResultDoubleTapped(const IInspectable& sender, const Windows::UI::Xaml::Input::DoubleTappedRoutedEventArgs& args);
+        void _OpenWorkspaceDocument(const std::filesystem::path& path, bool pin);
+        void _RefreshWorkspaceDocumentTabs();
+        void _LoadWorkspaceDocument(const std::filesystem::path& path);
+        void _ApplyWorkspaceDocumentTheme();
+        void _WorkspaceDocumentThemeChanged(const Windows::UI::Xaml::FrameworkElement& sender, const IInspectable& args);
+        safe_void_coroutine _ApplyWorkspaceHighlightAsync(std::vector<WorkspaceSyntax::Span> spans, bool dark, uint64_t version);
+        void _UpdateWorkspaceDocumentCaretStatus();
+        void _WorkspaceDocumentCaretChanged(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceTerminalGotFocus(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _WorkspaceDocumentGotFocus(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
+        void _UpdateWorkspaceDocumentLayout();
+        void _WorkspaceDocumentSelectionChanged(const IInspectable& sender, const Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
+        void _WorkspaceDocumentTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& args);
+        void _WorkspaceContentSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
+        void _ResizeWorkspaceFilesColumn();
+        void _WorkspaceFilesDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
+        void _WorkspaceDocumentDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
+        void _WorkspaceDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
+        void _WorkspaceDividerPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
+        void _WorkspaceDividerPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         winrt::TerminalApp::ColorPickupFlyout _tabColorPicker{ nullptr };
+        safe_void_coroutine _ShowTabColorPicker(winrt::TerminalApp::Tab tab);
 
         Microsoft::Terminal::Settings::Model::CascadiaSettings _settings{ nullptr };
 
@@ -386,9 +511,9 @@ namespace winrt::TerminalApp::implementation
         void _restartPaneConnection(const TerminalApp::TerminalPaneContent&, const winrt::Windows::Foundation::IInspectable&);
 
         void _OpenNewWindow(const Microsoft::Terminal::Settings::Model::INewContentArgs& contentArgs);
-        void _OpenWorkspaceWindow(const winrt::hstring name);
 
         void _OpenNewTerminalViaDropdown(const Microsoft::Terminal::Settings::Model::NewTerminalArgs newTerminalArgs);
+        void _ResolveProfileForElevation(const Microsoft::Terminal::Settings::Model::NewTerminalArgs& newTerminalArgs);
 
         bool _displayingCloseDialog{ false };
         void _SettingsButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
@@ -396,6 +521,7 @@ namespace winrt::TerminalApp::implementation
         void _AboutButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
 
         void _KeyDownHandler(const Windows::Foundation::IInspectable& sender, const Windows::UI::Xaml::Input::KeyRoutedEventArgs& e);
+        bool _DispatchKeyBinding(const IInspectable& sender, const Microsoft::Terminal::Settings::Model::ActionAndArgs& action);
         static ::Microsoft::Terminal::Core::ControlKeyStates _GetPressedModifierKeys() noexcept;
         static void _ClearKeyboardState(const WORD vkey, const WORD scanCode) noexcept;
         void _HookupKeyBindings(const Microsoft::Terminal::Settings::Model::IActionMapView& actionMap) noexcept;
@@ -424,6 +550,7 @@ namespace winrt::TerminalApp::implementation
 
         void _DismissTabContextMenus();
         void _FocusCurrentTab(const bool focusAlways);
+        void _FocusWorkspaceContent(const winrt::TerminalApp::Tab& tab);
         bool _HasMultipleTabs() const;
 
         void _SelectNextTab(const bool bMoveRight, const Windows::Foundation::IReference<Microsoft::Terminal::Settings::Model::TabSwitcherMode>& customTabSwitcherMode);
@@ -526,7 +653,7 @@ namespace winrt::TerminalApp::implementation
         void _OnTabItemsChanged(const IInspectable& sender, const Windows::Foundation::Collections::IVectorChangedEventArgs& eventArgs);
         void _OnTabCloseRequested(const IInspectable& sender, const Microsoft::UI::Xaml::Controls::TabViewTabCloseRequestedEventArgs& eventArgs);
         void _OnFirstLayout(const IInspectable& sender, const IInspectable& eventArgs);
-        void _UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab);
+        void _UpdatedSelectedTab(const winrt::TerminalApp::Tab& tab, bool activateTerminal = true);
         void _UpdateBackground(const winrt::Microsoft::Terminal::Settings::Model::Profile& profile);
 
         // Docked side tabs ("tabPosition": "left") have a user-resizable
@@ -538,8 +665,6 @@ namespace winrt::TerminalApp::implementation
         void _ResizeSideTabColumn(double requestedWidth);
         void _SideTabLayoutSizeChanged(const IInspectable& sender, const Windows::UI::Xaml::SizeChangedEventArgs& args);
         void _SideTabDockClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& args);
-        void _SideTabDockPointerEntered(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
-        void _SideTabDockPointerExited(const IInspectable& sender, const Windows::UI::Xaml::Input::PointerRoutedEventArgs& args);
         void _SideTabDividerDragStarted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragStartedEventArgs& args);
         void _SideTabDividerDragDelta(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragDeltaEventArgs& args);
         void _SideTabDividerDragCompleted(const IInspectable& sender, const Windows::UI::Xaml::Controls::Primitives::DragCompletedEventArgs& args);
@@ -648,7 +773,6 @@ namespace winrt::TerminalApp::implementation
 
         void _PopulateContextMenu(const Microsoft::Terminal::Control::TermControl& control, const Microsoft::UI::Xaml::Controls::CommandBarFlyout& sender, const bool withSelection);
         void _PopulateQuickFixMenu(const Microsoft::Terminal::Control::TermControl& control, const Windows::UI::Xaml::Controls::MenuFlyout& sender);
-        void _PopulateWorkspaceFlyout();
         void _UpdateWorkspaceLabels();
         winrt::Windows::UI::Xaml::Controls::MenuFlyout _CreateRunAsAdminFlyout(int profileIndex);
 
