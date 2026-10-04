@@ -47,6 +47,21 @@ namespace winrt
 
 namespace TerminalAppLocalTests
 {
+    struct QuitDialogPresenter : winrt::implements<QuitDialogPresenter, winrt::TerminalApp::IDialogPresenter>
+    {
+        ContentDialogResult result{ ContentDialogResult::None };
+        uint32_t calls{ 0 };
+
+        winrt::Windows::Foundation::IAsyncOperation<ContentDialogResult> ShowDialog(const ContentDialog& dialog)
+        {
+            ++calls;
+            VERIFY_ARE_EQUAL(ContentDialogButton::Primary, dialog.DefaultButton());
+            const auto checkbox = dialog.Content().as<CheckBox>();
+            VERIFY_IS_FALSE(checkbox.IsChecked().Value());
+            co_return result;
+        }
+    };
+
     struct WorkspaceDialogPresenter : winrt::implements<WorkspaceDialogPresenter, winrt::TerminalApp::IDialogPresenter>
     {
         ContentDialogResult result{ ContentDialogResult::None };
@@ -122,6 +137,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceNavigationLifecycle);
         TEST_METHOD(WorkspaceExplorerContext);
         TEST_METHOD(EmptyWorkspaceWindowClose);
+        TEST_METHOD(QuitConfirmation);
         TEST_METHOD(EmptyWorkspaceSplit);
         TEST_METHOD(WorkspaceBulkClose);
         TEST_METHOD(WorkspaceLaunchArguments);
@@ -948,6 +964,45 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(2u, closeRequests);
             page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Always);
             VERIFY_IS_TRUE(page->_ShouldWarnOnClose());
+        });
+    }
+
+    void TabTests::QuitConfirmation()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            const auto presenter = winrt::make_self<QuitDialogPresenter>();
+            page->_dialogPresenter = winrt::make_weak(presenter.as<winrt::TerminalApp::IDialogPresenter>());
+            uint32_t quitRequests{};
+            const auto token = page->QuitRequested([&](auto&&, auto&&) { ++quitRequests; });
+            const auto cleanup = wil::scope_exit([&]() { page->QuitRequested(token); });
+
+            // Automatic window close needs no warning for one unsplit terminal,
+            // but Quit must still confirm before closing sessions in other windows.
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Automatic);
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_IS_FALSE(page->_ShouldWarnOnClose());
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(1u, presenter->calls);
+            VERIFY_ARE_EQUAL(0u, quitRequests);
+            VERIFY_IS_FALSE(page->_displayingCloseDialog);
+
+            presenter->result = ContentDialogResult::Primary;
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(2u, presenter->calls);
+            VERIFY_ARE_EQUAL(1u, quitRequests);
+            VERIFY_IS_FALSE(page->_displayingCloseDialog);
+
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Always);
+            presenter->result = ContentDialogResult::None;
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(3u, presenter->calls);
+            VERIFY_ARE_EQUAL(1u, quitRequests);
+
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Never);
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(3u, presenter->calls);
+            VERIFY_ARE_EQUAL(2u, quitRequests);
         });
     }
 
@@ -2386,7 +2441,24 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->TabContent().Visibility());
             VERIFY_ARE_EQUAL(document, page->_workspaceDocuments.front().id);
             page->_ToggleWorkspacePane(L"terminal");
+            page->_ToggleWorkspacePane(L"editor");
+            VERIFY_IS_TRUE(page->_GetActiveControl().Focus(FocusState::Programmatic));
+            page->_ToggleWorkspacePane(L"terminal");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->TabContent().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(Input::FocusManager::GetFocusedElement(page->XamlRoot()) == page->_workspaceHomeButton);
 
+            // The same visible Home button receives focus when the editor is
+            // the last content pane hidden, in either tab position.
+            page->_ToggleWorkspacePane(L"editor");
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(page->WorkspaceEditorSurface().Child().as<Button>().Focus(FocusState::Programmatic));
+            page->_ToggleWorkspacePane(L"editor");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->TabContent().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(Input::FocusManager::GetFocusedElement(page->XamlRoot()) == page->_workspaceHomeButton);
         });
     }
 
@@ -2460,7 +2532,7 @@ namespace TerminalAppLocalTests
         });
         TestOnUIThread([&]() {
             page->SetWorkspaceEditorEnabled(true);
-            page->_workspaceEditorReady = true;
+            page->_workspaceEditorSession.Connected();
             bridgeToken = page->WorkspaceEditorMessage([&](auto&&, const winrt::hstring& serialized) {
                 using namespace winrt::Windows::Data::Json;
                 const auto message = JsonObject::Parse(serialized);
@@ -2584,7 +2656,7 @@ namespace TerminalAppLocalTests
         });
         TestOnUIThread([&]() {
             page->SetWorkspaceEditorEnabled(true);
-            page->_workspaceEditorReady = true;
+            page->_workspaceEditorSession.Connected();
             bridgeToken = page->WorkspaceEditorMessage([&](auto&&, const winrt::hstring& serialized) {
                 const auto message = winrt::Windows::Data::Json::JsonObject::Parse(serialized);
                 if (message.GetNamedString(L"type", L"") == L"theme")

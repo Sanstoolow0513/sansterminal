@@ -2410,8 +2410,28 @@ namespace winrt::TerminalApp::implementation
     //   signal that we want to close everything.
     safe_void_coroutine TerminalPage::RequestQuit()
     {
+        const auto lifetime = get_strong();
+        if (_displayingCloseDialog || _tryingCloseWindow)
+        {
+            co_return;
+        }
+        // A quit spans all windows, even if each window has only one terminal
+        // and its window-local automatic close warning would not be shown.
+        if (_settings.GlobalSettings().ConfirmOnClose() != ConfirmOnClose::Never)
+        {
+            if (_newTabButton && _newTabButton.Flyout())
+            {
+                _newTabButton.Flyout().Hide();
+            }
+            _DismissTabContextMenus();
+            _displayingCloseDialog = true;
+            const auto reset = wil::scope_exit([&]() noexcept { _displayingCloseDialog = false; });
+            if (co_await _ShowConfirmCloseDialog(ConfirmCloseDialogKind::CloseAll) != ContentDialogResult::Primary)
+            {
+                co_return;
+            }
+        }
         QuitRequested.raise(nullptr, nullptr);
-        co_return;
     }
 
     WindowLayout TerminalPage::GetWindowLayout()
@@ -7747,7 +7767,7 @@ namespace winrt::TerminalApp::implementation
         else if (WorkspaceDocumentPanel().Visibility() == Visibility::Visible)
             _FocusWorkspaceDocument();
         else
-            WorkspaceHeaderHome().Focus(FocusState::Programmatic);
+            _workspaceHomeButton.Focus(FocusState::Programmatic);
     }
 
     void TerminalPage::_UpdateWorkspaceDocumentLayout()

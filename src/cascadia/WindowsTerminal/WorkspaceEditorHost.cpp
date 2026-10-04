@@ -42,7 +42,6 @@ WorkspaceEditorHost::WorkspaceEditorHost(HWND parent, HWND island, winrt::Termin
     // controller still owns its own in-memory Monaco models. WebView2 supports
     // sharing a UDF when environment options match; do not delete a live UDF.
     _userData = cache / L"Sansterminal" / profile;
-    std::filesystem::create_directories(_userData);
     _log = _userData / L"probe.log";
     _nativeWindow.reset(CreateWindowExW(0, L"STATIC", L"Sansterminal EditorHostProbe", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 0, 0, _parent, nullptr, wil::GetModuleInstanceHandle(), nullptr));
     THROW_LAST_ERROR_IF_NULL(_nativeWindow.get());
@@ -136,6 +135,15 @@ void WorkspaceEditorHost::_Start()
     _started = true;
     const auto generation = ++_generation;
     _startedAt = std::chrono::steady_clock::now();
+    // Cache failures belong to the editor's recovery UI. Home and terminal-only
+    // windows must be able to start without creating a WebView2 profile.
+    std::error_code cacheError;
+    std::filesystem::create_directories(_userData, cacheError);
+    if (cacheError)
+    {
+        _Fail(HRESULT_FROM_WIN32(cacheError.value()));
+        return;
+    }
     _popupTimer.Start();
     constexpr std::array requiredAssets{
         L"index.html", L"workspace.html", L"editor.js", L"editor.css", L"editor.worker.js", L"json.worker.js", L"ts.worker.js", L"css.worker.js", L"html.worker.js"
