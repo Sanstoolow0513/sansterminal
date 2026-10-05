@@ -12,6 +12,7 @@
 #include "ProfileViewModel.h"
 #include "GlobalAppearance.h"
 #include "GlobalAppearanceViewModel.h"
+#include "WorkspaceLayoutPage.h"
 #include "ColorSchemes.h"
 #include "EditColorScheme.h"
 #include "Profiles.h"
@@ -662,6 +663,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
                 contentFrame().Navigate(xaml_typename<Editor::GlobalAppearance>(), winrt::make<NavigateToPageArgs>(winrt::make<GlobalAppearanceViewModel>(_settingsClone.GlobalSettings(), _windowSettingsClone), *this, elementToFocus));
                 _breadcrumbs.Append(winrt::make<Breadcrumb>(vm, RS_(L"Nav_Appearance/Content"), BreadcrumbSubPage::None));
             }
+            else if (*clickedItemTag == workspaceLayoutTag)
+            {
+                contentFrame().Navigate(xaml_typename<Editor::WorkspaceLayoutPage>(), winrt::make<NavigateToPageArgs>(_settingsClone.GlobalSettings(), *this, elementToFocus));
+                _breadcrumbs.Append(winrt::make<Breadcrumb>(vm, RS_(L"Nav_WorkspaceLayout/Content"), BreadcrumbSubPage::None));
+            }
         }
         else if (const auto& profile = vm.try_as<Editor::ProfileViewModel>())
         {
@@ -985,6 +991,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     void MainPage::_AppendProfilesRootCrumb()
     {
         _breadcrumbs.Append(winrt::make<Breadcrumb>(box_value(profilesTag), RS_(L"Nav_Profiles/Content"), BreadcrumbSubPage::None));
+    }
+
+    void MainPage::NavigateToWorkspace()
+    {
+        _Navigate(box_value(workspaceLayoutTag));
     }
 
     void MainPage::_SelectNavItemByTag(std::wstring_view tag)

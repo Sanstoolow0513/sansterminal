@@ -986,4 +986,19 @@
   <data name="SplitSizeActionArgumentLocalized" xml:space="preserve">
     <value>Split size</value>
   </data>
+  <data name="ToggleWorkspaceFilesCommandKey" xml:space="preserve">
+    <value>Toggle workspace files</value>
+  </data>
+  <data name="ToggleWorkspaceTerminalCommandKey" xml:space="preserve">
+    <value>Toggle workspace terminal</value>
+  </data>
+  <data name="ToggleWorkspaceEditorCommandKey" xml:space="preserve">
+    <value>Toggle workspace editor</value>
+  </data>
+  <data name="ToggleWorkspaceTabsCommandKey" xml:space="preserve">
+    <value>Toggle workspace tabs</value>
+  </data>
+  <data name="OpenWorkspaceLayoutCommandKey" xml:space="preserve">
+    <value>Open workspace layout settings</value>
+  </data>
 </root>

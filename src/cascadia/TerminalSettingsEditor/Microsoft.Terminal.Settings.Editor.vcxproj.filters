@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClInclude Include="WorkspaceLayoutPage.h" />
+    <ClCompile Include="WorkspaceLayoutPage.cpp" />
+    <Page Include="WorkspaceLayoutPage.xaml" />
+    <Midl Include="WorkspaceLayoutPage.idl" />
     <Natvis Include="$(SolutionDir)tools\ConsoleTypes.natvis" />
     <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />
   </ItemGroup>

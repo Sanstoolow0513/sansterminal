@@ -16,6 +16,8 @@
 #include "../TerminalApp/TerminalSettingsCache.h"
 #include "CppWinrtTailored.h"
 #include <fstream>
+#include <array>
+#include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.UI.Xaml.Automation.Peers.h>
 #include <winrt/Windows.UI.Xaml.Automation.Provider.h>
 
@@ -45,6 +47,21 @@ namespace winrt
 
 namespace TerminalAppLocalTests
 {
+    struct QuitDialogPresenter : winrt::implements<QuitDialogPresenter, winrt::TerminalApp::IDialogPresenter>
+    {
+        ContentDialogResult result{ ContentDialogResult::None };
+        uint32_t calls{ 0 };
+
+        winrt::Windows::Foundation::IAsyncOperation<ContentDialogResult> ShowDialog(const ContentDialog& dialog)
+        {
+            ++calls;
+            VERIFY_ARE_EQUAL(ContentDialogButton::Primary, dialog.DefaultButton());
+            const auto checkbox = dialog.Content().as<CheckBox>();
+            VERIFY_IS_FALSE(checkbox.IsChecked().Value());
+            co_return result;
+        }
+    };
+
     struct WorkspaceDialogPresenter : winrt::implements<WorkspaceDialogPresenter, winrt::TerminalApp::IDialogPresenter>
     {
         ContentDialogResult result{ ContentDialogResult::None };
@@ -116,9 +133,11 @@ namespace TerminalAppLocalTests
         TEST_METHOD(CreateTerminalMuxXamlType);
         TEST_METHOD(VerticalTabViewLayout);
         TEST_METHOD(SideTabsPageLayout);
+        TEST_METHOD(WorkspacePanelLayouts);
         TEST_METHOD(WorkspaceNavigationLifecycle);
         TEST_METHOD(WorkspaceExplorerContext);
         TEST_METHOD(EmptyWorkspaceWindowClose);
+        TEST_METHOD(QuitConfirmation);
         TEST_METHOD(EmptyWorkspaceSplit);
         TEST_METHOD(WorkspaceBulkClose);
         TEST_METHOD(WorkspaceLaunchArguments);
@@ -127,6 +146,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(WorkspaceTabActivation);
         TEST_METHOD(WorkspaceSurfaceDimensions);
         TEST_METHOD(WorkspaceTabSwitcherModes);
+        TEST_METHOD(WorkspaceXamlOverlayVisibility);
         TEST_METHOD(WorkspaceSidebarTabColors);
         TEST_METHOD(WorkspaceResizeCallbacks);
         TEST_METHOD(WorkspacePanelResizeRequests);
@@ -134,6 +154,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(NamedWindowLayoutRestoration);
         TEST_METHOD(LegacyNamedWindowWorkspaceOwnership);
         TEST_METHOD(WorkspaceShortcutRouting);
+        TEST_METHOD(WorkspaceKeyBindingRouting);
         TEST_METHOD(WorkspaceLayoutRecentHistory);
         TEST_METHOD(WorkspaceLayoutReplayOwnership);
         TEST_METHOD(WorkspaceMoveTabNeighbors);
@@ -184,6 +205,7 @@ namespace TerminalAppLocalTests
         void _initializeTerminalPage(winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage>& page,
                                      CascadiaSettings initialSettings);
         winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> _commonSetup(TabPosition position = TabPosition::Top);
+        void _WaitForWorkspaceDocuments(const winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage>& page);
         winrt::com_ptr<winrt::TerminalApp::implementation::WindowProperties> _windowProperties;
         winrt::com_ptr<winrt::TerminalApp::implementation::ContentManager> _contentManager;
     };
@@ -203,6 +225,25 @@ namespace TerminalAppLocalTests
             }
         });
         VERIFY_SUCCEEDED(result);
+    }
+
+    void TabTests::_WaitForWorkspaceDocuments(const winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage>& page)
+    {
+        // Keep the dispatcher free while the production service performs I/O.
+        bool loaded = false;
+        for (auto attempt = 0; attempt < 500 && !loaded; ++attempt)
+        {
+            TestOnUIThread([&]() {
+                loaded = std::all_of(page->_workspaceDocuments.begin(), page->_workspaceDocuments.end(), [](const auto& document) {
+                    return document.model.loaded && !document.loading;
+                });
+            });
+            if (!loaded)
+            {
+                Sleep(10);
+            }
+        }
+        VERIFY_IS_TRUE(loaded, L"Workspace documents did not finish loading.");
     }
 
     void TabTests::EnsureTestsActivate()
@@ -631,23 +672,29 @@ namespace TerminalAppLocalTests
             page->UpdateLayout();
             const auto layout = page->SideTabLayout();
             VERIFY_ARE_EQUAL(260.0f, page->SideTabDivider().TransformToVisual(layout).TransformPoint({}).X);
-            const auto filesWidth = page->WorkspaceFilesColumn().ActualWidth();
+            const auto filesWidth = page->WorkspaceFilesPanel().ActualWidth();
+            const auto filesRatio = page->_workspaceGeometry.splits.front().ratio;
             VERIFY_IS_TRUE(filesWidth > 0);
-            VERIFY_ARE_EQUAL(static_cast<float>(260.0 + filesWidth), page->WorkspaceFilesDivider().TransformToVisual(layout).TransformPoint({}).X);
+            VERIFY_IS_TRUE(std::abs(260.0 + filesWidth - page->WorkspaceFilesDivider().TransformToVisual(layout).TransformPoint({}).X) < 1);
             page->_SideTabDividerDragStarted(nullptr, winrt::WUX::Controls::Primitives::DragStartedEventArgs{ 0, 0 });
             page->_SideTabDividerDragDelta(nullptr, winrt::WUX::Controls::Primitives::DragDeltaEventArgs{ -20, 0 });
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(240.0, page->SideTabColumn().ActualWidth());
-            VERIFY_ARE_EQUAL(filesWidth, page->WorkspaceFilesColumn().ActualWidth());
+            VERIFY_ARE_EQUAL(filesRatio, page->_workspaceGeometry.splits.front().ratio);
+            const auto resizedFilesWidth = page->WorkspaceFilesPanel().ActualWidth();
             page->_WorkspaceFilesDividerDragDelta(nullptr, winrt::WUX::Controls::Primitives::DragDeltaEventArgs{ -20, 0 });
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(240.0, page->SideTabColumn().ActualWidth());
-            VERIFY_ARE_EQUAL(filesWidth - 20, page->WorkspaceFilesColumn().ActualWidth());
+            VERIFY_IS_TRUE(std::abs(resizedFilesWidth - 20 - page->WorkspaceFilesPanel().ActualWidth()) < 1);
             page->_ResizeSideTabColumn(260);
 
             page->_ShowWorkspaceHub();
-            VERIFY_ARE_EQUAL(Visibility::Visible, page->SideTabLayout().Visibility());
-            VERIFY_ARE_EQUAL(260.0, page->WorkspaceHub().Margin().Left);
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabLayout().Visibility());
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceContentArea().Visibility());
+            VERIFY_ARE_EQUAL(0.0, page->WorkspaceHub().Margin().Left);
+            VERIFY_ARE_EQUAL(0.0f, page->WorkspaceHub().TransformToVisual(page->Root()).TransformPoint({}).X);
+            VERIFY_ARE_EQUAL(page->Root().ActualWidth(), page->WorkspaceHub().ActualWidth());
             page->_ShowWorkspaceContent();
             page->SetFocusMode(true);
             VERIFY_ARE_EQUAL(Visibility::Collapsed, header.Visibility());
@@ -660,6 +707,136 @@ namespace TerminalAppLocalTests
             page->SetShowTabsFullscreen(true);
             VERIFY_ARE_EQUAL(Visibility::Visible, header.Visibility());
             page->SetFullscreen(false);
+        });
+    }
+
+    void TabTests::WorkspacePanelLayouts()
+    {
+        namespace Layout = Sansterminal::WorkspaceLayout;
+        const auto page = _commonSetup(TabPosition::Left);
+        TestOnUIThread([&]() {
+            GUID unique{};
+            VERIFY_SUCCEEDED(CoCreateGuid(&unique));
+            const auto root = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / winrt::to_hstring(unique).c_str();
+            std::filesystem::create_directories(root);
+            const auto cleanup = wil::scope_exit([&]() noexcept {
+                std::error_code error;
+                std::filesystem::remove_all(root, error);
+            });
+            const auto file = root / L"layout.txt";
+            std::ofstream{ file } << "layout preserves document and terminal identities";
+            page->Width(1600);
+            page->Height(1000);
+            page->UpdateLayout();
+            const auto id = page->_activeWorkspaceId;
+            page->_FindWorkspace(id)->root = root;
+            page->_FindWorkspace(id)->currentDirectory = root;
+            page->_UpdateWorkspaceFilesUI();
+            page->_OpenWorkspaceDocument(file, true);
+            page->UpdateLayout();
+            const auto terminal = page->_GetFocusedTab();
+            const auto documentTab = page->WorkspaceDocumentTabs().SelectedItem();
+            const auto sidebarWidth = page->SideTabColumn().ActualWidth();
+            const std::array<FrameworkElement, 3> panels{ page->WorkspaceFilesPanel(), page->TabContent(), page->WorkspaceDocumentPanel() };
+            const auto verifyGeometry = [&]() {
+                const auto& geometry = page->_workspaceGeometry;
+                for (size_t i = 0; i < panels.size(); ++i)
+                {
+                    VERIFY_ARE_EQUAL(geometry.visible[i] ? Visibility::Visible : Visibility::Collapsed, panels[i].Visibility());
+                    if (geometry.visible[i])
+                    {
+                        const auto point = panels[i].TransformToVisual(page->WorkspaceContentArea()).TransformPoint({});
+                        VERIFY_IS_TRUE(std::abs(point.X - geometry.panes[i].x) < 1);
+                        VERIFY_IS_TRUE(std::abs(point.Y - geometry.panes[i].y) < 1);
+                        VERIFY_IS_TRUE(std::abs(panels[i].ActualWidth() - geometry.panes[i].width) < 1);
+                        VERIFY_IS_TRUE(std::abs(panels[i].ActualHeight() - geometry.panes[i].height) < 1);
+                    }
+                    else
+                    {
+                        VERIFY_ARE_EQUAL(0.0, panels[i].Width());
+                        VERIFY_ARE_EQUAL(0.0, panels[i].Height());
+                    }
+                }
+                VERIFY_IS_TRUE(terminal == page->_GetFocusedTab());
+                VERIFY_IS_TRUE(documentTab == page->WorkspaceDocumentTabs().SelectedItem());
+            };
+            const std::array<std::wstring_view, 4> compositions{
+                LR"({"direction":"row","ratio":0.24,"first":"files","second":{"direction":"column","ratio":0.45,"first":"editor","second":"terminal"}})",
+                LR"({"direction":"column","ratio":0.55,"first":"editor","second":{"direction":"row","ratio":0.65,"first":"terminal","second":"files"}})",
+                LR"({"direction":"row","ratio":0.68,"first":{"direction":"column","ratio":0.45,"first":"files","second":"terminal"},"second":"editor"})",
+                LR"({"direction":"column","ratio":0.55,"first":{"direction":"row","ratio":0.5,"first":"editor","second":"files"},"second":"terminal"})"
+            };
+            for (const auto serialized : compositions)
+            {
+                auto workspace = page->_FindWorkspace(id);
+                workspace->panelLayout = Layout::Layout::Parse(serialized);
+                page->_UpdateWorkspaceDocumentLayout();
+                page->UpdateLayout();
+                verifyGeometry();
+                VERIFY_ARE_EQUAL(2u, page->_workspaceGeometry.splits.size());
+                VERIFY_ARE_EQUAL(sidebarWidth, page->SideTabColumn().ActualWidth());
+                for (size_t index = 0; index < 2; ++index)
+                {
+                    const auto split = page->_workspaceGeometry.splits[index];
+                    const auto row = split.direction == Layout::Direction::Row;
+                    const auto expected = split.ratio + 12 / (row ? split.rect.width : split.rect.height);
+                    page->_ResizeWorkspaceSplit(index, row ? 12 : 0, row ? 0 : 12);
+                    page->UpdateLayout();
+                    VERIFY_IS_TRUE(std::abs(page->_workspaceGeometry.splits[index].ratio - expected) < 0.0001);
+                    verifyGeometry();
+                }
+                // Each pane can hide independently; hidden branches collapse
+                // without moving models or terminating the original connection.
+                for (unsigned int mask = 0; mask < 8; ++mask)
+                {
+                    page->_workspaceShowFiles = (mask & 1) != 0;
+                    page->_workspaceShowTerminal = (mask & 2) != 0;
+                    page->_workspaceShowEditor = (mask & 4) != 0;
+                    page->_UpdateWorkspaceDocumentLayout();
+                    page->UpdateLayout();
+                    verifyGeometry();
+                    for (size_t index = 0; index < 3; ++index)
+                        VERIFY_ARE_EQUAL((mask & (1u << index)) != 0, page->_workspaceGeometry.visible[index]);
+                }
+                page->_workspaceShowFiles = page->_workspaceShowTerminal = page->_workspaceShowEditor = true;
+            }
+            page->_UpdateWorkspaceDocumentLayout();
+            page->UpdateLayout();
+            const auto retained = page->_FindWorkspace(id)->panelLayout.Serialize();
+            page->_SwitchWorkspace(L"panel-layout-other", false);
+            page->_SwitchWorkspace(id, false);
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(retained == page->_FindWorkspace(id)->panelLayout.Serialize());
+            verifyGeometry();
+
+            page->_ToggleWorkspacePane(L"tabs");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(0.0, page->SideTabColumn().ActualWidth());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceLayoutButton().Visibility());
+            page->_SideTabDockClick(nullptr, nullptr);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(sidebarWidth, page->SideTabColumn().ActualWidth());
+
+            page->_ShowWorkspaceHub();
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->SideTabLayout().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceHub().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceEditorSurface().Visibility());
+            const auto hub = page->WorkspaceHub();
+            const auto content = page->WorkspaceHubContent();
+            const auto origin = hub.TransformToVisual(page->Root()).TransformPoint({});
+            VERIFY_ARE_EQUAL(0.0f, origin.X);
+            VERIFY_ARE_EQUAL(page->Root().ActualWidth(), hub.ActualWidth());
+            VERIFY_ARE_EQUAL(page->Root().RowDefinitions().GetAt(2).ActualHeight(), hub.ActualHeight());
+            const auto position = content.TransformToVisual(hub).TransformPoint({});
+            VERIFY_IS_TRUE(std::abs(position.X + content.ActualWidth() / 2 - hub.ActualWidth() / 2) < 1);
+            VERIFY_IS_TRUE(std::abs(position.Y + content.ActualHeight() / 2 - hub.ActualHeight() / 2) < 1);
+            const auto size = page->GetWindowLayout().InitialSize().Value();
+            VERIFY_ARE_EQUAL(static_cast<float>(hub.ActualWidth()), size.Width);
+            VERIFY_ARE_EQUAL(static_cast<float>(hub.ActualHeight()), size.Height);
+            page->_ShowWorkspaceContent();
+            page->UpdateLayout();
+            verifyGeometry();
         });
     }
 
@@ -787,6 +964,45 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(2u, closeRequests);
             page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Always);
             VERIFY_IS_TRUE(page->_ShouldWarnOnClose());
+        });
+    }
+
+    void TabTests::QuitConfirmation()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            const auto presenter = winrt::make_self<QuitDialogPresenter>();
+            page->_dialogPresenter = winrt::make_weak(presenter.as<winrt::TerminalApp::IDialogPresenter>());
+            uint32_t quitRequests{};
+            const auto token = page->QuitRequested([&](auto&&, auto&&) { ++quitRequests; });
+            const auto cleanup = wil::scope_exit([&]() { page->QuitRequested(token); });
+
+            // Automatic window close needs no warning for one unsplit terminal,
+            // but Quit must still confirm before closing sessions in other windows.
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Automatic);
+            VERIFY_ARE_EQUAL(1u, page->NumberOfTabs());
+            VERIFY_IS_FALSE(page->_ShouldWarnOnClose());
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(1u, presenter->calls);
+            VERIFY_ARE_EQUAL(0u, quitRequests);
+            VERIFY_IS_FALSE(page->_displayingCloseDialog);
+
+            presenter->result = ContentDialogResult::Primary;
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(2u, presenter->calls);
+            VERIFY_ARE_EQUAL(1u, quitRequests);
+            VERIFY_IS_FALSE(page->_displayingCloseDialog);
+
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Always);
+            presenter->result = ContentDialogResult::None;
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(3u, presenter->calls);
+            VERIFY_ARE_EQUAL(1u, quitRequests);
+
+            page->_settings.GlobalSettings().ConfirmOnClose(ConfirmOnClose::Never);
+            page->RequestQuit();
+            VERIFY_ARE_EQUAL(3u, presenter->calls);
+            VERIFY_ARE_EQUAL(2u, quitRequests);
         });
     }
 
@@ -1171,27 +1387,31 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_TRUE(size.Width > page->_tabContent.ActualWidth());
             };
             verifySize();
-            page->_FindWorkspace(id)->explorerWidth = 700;
+            page->_FindWorkspace(id)->panelLayout.SetRatio("", 0.7);
             page->_ResizeWorkspaceFilesColumn();
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(700.0, page->WorkspaceFilesColumn().ActualWidth());
+            VERIFY_IS_TRUE(std::abs(page->WorkspaceContentArea().ActualWidth() * 0.7 - 3 - page->WorkspaceFilesPanel().ActualWidth()) < 1);
 
             page->Width(600);
             page->UpdateLayout();
             VERIFY_IS_TRUE(page->WorkspaceContentArea().ActualWidth() > 0);
-            VERIFY_IS_TRUE(page->SideTabColumn().ActualWidth() + page->WorkspaceFilesColumn().ActualWidth() < 600);
+            VERIFY_IS_TRUE(page->SideTabColumn().ActualWidth() + page->WorkspaceFilesPanel().ActualWidth() < 600);
             page->_OpenWorkspaceDocument(file, true);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(0.0, page->_tabContent.ActualWidth());
+            // A narrow viewport keeps all enabled panes visible; their bounds
+            // follow the configured proportions instead of hiding a pane.
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->_tabContent.Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(page->TabContent().Width() > 0);
             verifySize();
 
             page->_SwitchWorkspace(L"dimensions-test-other", false);
-            // An inactive workspace can retain its width from a larger window.
-            page->_FindWorkspace(id)->explorerWidth = 900;
+            // An inactive workspace retains its proportions while its bounds follow the window.
+            page->_FindWorkspace(id)->panelLayout.SetRatio("", 0.9);
             page->_SwitchWorkspace(id, false);
             page->UpdateLayout();
             VERIFY_IS_TRUE(page->WorkspaceContentArea().ActualWidth() > 0);
-            VERIFY_IS_TRUE(page->_FindWorkspace(id)->explorerWidth < 900);
+            VERIFY_IS_TRUE(page->WorkspaceFilesPanel().ActualWidth() < page->WorkspaceContentArea().ActualWidth());
             verifySize();
 
             if (sideTabs)
@@ -1244,6 +1464,52 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_GetFocusedTab() == first);
             page->_SelectNextTab(false, nullptr);
             VERIFY_IS_TRUE(page->_GetFocusedTab() == third);
+        });
+    }
+
+    void TabTests::WorkspaceXamlOverlayVisibility()
+    {
+        const auto page = _commonSetup();
+        TestOnUIThread([&]() {
+            std::vector<bool> visibility;
+            const auto token = page->XamlOverlayVisibilityChanged([&](auto&&, bool visible) { visibility.push_back(visible); });
+            const auto revoke = wil::scope_exit([&]() noexcept { page->XamlOverlayVisibilityChanged(token); });
+            const auto palette = page->LoadCommandPalette();
+            const auto suggestions = page->LoadSuggestionsUI();
+            VERIFY_IS_TRUE(visibility.empty());
+
+            // Opening either in-tree overlay must suppress the HWND immediately,
+            // without waiting for a layout pass or the popup polling timer.
+            palette.EnableCommandPaletteMode(CommandPaletteLaunchMode::Action);
+            palette.Visibility(Visibility::Visible);
+            VERIFY_ARE_EQUAL(1u, visibility.size());
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
+
+            suggestions.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_TRUE(visibility.back());
+            suggestions.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
+
+            // Tab search and the keyboard tab switcher share the same control.
+            palette.EnableTabSearchMode();
+            palette.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
+            // No physical modifier is held in a unit test. Leave the switcher
+            // empty so its anchor-key handler cannot immediately commit a tab.
+            palette.SetTabs(winrt::single_threaded_observable_vector<Tab>(), winrt::single_threaded_observable_vector<Tab>());
+            palette.EnableTabSwitcherMode(0, TabSwitcherMode::InOrder);
+            palette.Visibility(Visibility::Visible);
+            VERIFY_IS_TRUE(visibility.back());
+            palette.Visibility(Visibility::Collapsed);
+            VERIFY_IS_FALSE(visibility.back());
         });
     }
 
@@ -2046,6 +2312,7 @@ namespace TerminalAppLocalTests
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"compact", compact));
         const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
         TestOnUIThread([&]() {
+            page->SetWorkspaceEditorEnabled(true);
             GUID unique{};
             VERIFY_SUCCEEDED(CoCreateGuid(&unique));
             const auto file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".txt");
@@ -2061,44 +2328,41 @@ namespace TerminalAppLocalTests
             page->_OpenWorkspaceDocument(file, true);
             if (compact)
             {
-                VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+                VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
             }
             // B has a terminal and no preview, so the shared editor loses
             // focus. Returning to A must use A's saved surface preference.
             page->_SwitchWorkspace(L"compact-restoration-B");
             page->_SwitchWorkspace(workspaceA, false);
-            VERIFY_IS_FALSE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
+            VERIFY_IS_FALSE(page->_FindWorkspace(workspaceA)->preferTerminalFocus);
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
             if (compact)
             {
-                VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+                VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
             }
             VERIFY_IS_TRUE(page->_GetFocusedTab() == terminal);
-            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
-            VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(terminal)->_focusState);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceEditorSurface().Visibility());
             page->WorkspaceContentArea().Width(480);
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
-            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
 
-            // Returning from the hub must leave keyboard input in the visible
-            // preview while the terminal column has zero width.
+            // Returning from Home preserves editor focus and both enabled panes.
             page->_ShowWorkspaceHub();
             page->_WorkspaceHubBackClick(nullptr, nullptr);
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
-            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
-            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
-            VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(terminal)->_focusState);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceEditorSurface().Visibility());
 
             // Activating the already-selected terminal is still an explicit
-            // request to show it in compact mode, in either tab-strip layout.
+            // request to focus it, in either tab-strip layout, without hiding the editor.
             page->FocusTab(terminal);
-            VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalFocus);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
             page->_SwitchWorkspace(L"compact-restoration-B", false);
             page->_SwitchWorkspace(workspaceA, false);
-            VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalInCompactView);
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(page->_FindWorkspace(workspaceA)->preferTerminalFocus);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
         });
     }
 
@@ -2111,21 +2375,16 @@ namespace TerminalAppLocalTests
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"sideTabs", sideTabs));
         const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
         const wil::unique_handle terminalFocused{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
-        const wil::unique_handle documentFocused{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
         VERIFY_IS_NOT_NULL(terminalFocused.get());
-        VERIFY_IS_NOT_NULL(documentFocused.get());
         winrt::event_token terminalFocusToken{};
-        winrt::event_token documentFocusToken{};
         std::filesystem::path file;
         const auto cleanup = wil::scope_exit([&]() noexcept {
-            RunOnUIThread([&]() {
-                page->_GetActiveControl().GotFocus(terminalFocusToken);
-                page->WorkspaceDocumentEditor().GotFocus(documentFocusToken);
-            });
+            RunOnUIThread([&]() { page->_GetActiveControl().GotFocus(terminalFocusToken); });
             std::error_code error;
             std::filesystem::remove(file, error);
         });
         TestOnUIThread([&]() {
+            page->SetWorkspaceEditorEnabled(true);
             GUID unique{};
             VERIFY_SUCCEEDED(CoCreateGuid(&unique));
             file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".txt");
@@ -2133,45 +2392,73 @@ namespace TerminalAppLocalTests
             page->WorkspaceContentArea().Width(1000);
             page->UpdateLayout();
             terminalFocusToken = page->_GetActiveControl().GotFocus([event = terminalFocused.get()](auto&&, auto&&) { SetEvent(event); });
-            documentFocusToken = page->WorkspaceDocumentEditor().GotFocus([event = documentFocused.get()](auto&&, auto&&) { SetEvent(event); });
             page->_OpenWorkspaceDocument(file, true);
-            page->UpdateLayout();
         });
-        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(documentFocused.get(), 10000));
+        _WaitForWorkspaceDocuments(page);
         TestOnUIThread([&]() {
-            VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalInCompactView);
-            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
+            // WebView2 focus crosses the native host bridge; it is not a XAML
+            // editor GotFocus event. Exercise that callback without a browser.
+            page->WorkspaceEditorFocused();
+            VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalFocus);
+            // This UWP test host has no WebView2 HWND. Use a focus target inside
+            // its editor surface so focus leaves the terminal independently of
+            // whether the window host has attached the global titlebar buttons.
+            Button editorFocusTarget;
+            editorFocusTarget.Content(winrt::box_value(L"Editor focus target"));
+            page->WorkspaceEditorSurface().Child(editorFocusTarget);
+            VERIFY_IS_TRUE(editorFocusTarget.Focus(FocusState::Programmatic));
             ResetEvent(terminalFocused.get());
-            // Focusing the terminal content directly does not activate a tab.
             VERIFY_IS_TRUE(page->_GetActiveControl().Focus(FocusState::Pointer));
         });
-        // GotFocus bubbles asynchronously. Observe the actual transition
-        // before issuing the next user interaction (resizing the window).
         VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(terminalFocused.get(), 10000));
         TestOnUIThread([&]() {
-            VERIFY_IS_TRUE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalInCompactView);
-            page->WorkspaceContentArea().Width(480);
-            page->UpdateLayout();
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
-            VERIFY_ARE_EQUAL(GridUnitType::Star, page->WorkspaceTerminalColumn().Width().GridUnitType);
-            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->_GetActiveControl().FocusState());
-
-            // Switching focus back to the same preview must update the
-            // preference even though the selected document has not changed.
-            page->WorkspaceContentArea().Width(1000);
-            page->UpdateLayout();
-            ResetEvent(documentFocused.get());
-            VERIFY_IS_TRUE(page->WorkspaceDocumentEditor().Focus(FocusState::Pointer));
-        });
-        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(documentFocused.get(), 10000));
-        TestOnUIThread([&]() {
-            VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalInCompactView);
+            VERIFY_IS_TRUE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalFocus);
             page->WorkspaceContentArea().Width(480);
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
-            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
-            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
-            VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetActiveControl().FocusState());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
+            page->WorkspaceContentArea().Width(1000);
+            page->UpdateLayout();
+            page->WorkspaceEditorFocused();
+            VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalFocus);
+            page->WorkspaceContentArea().Width(480);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.loaded);
+            const auto document = page->_workspaceDocuments.front().id;
+            page->_ToggleWorkspacePane(L"editor");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
+            page->WorkspaceContentArea().Width(1000);
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            page->_ToggleWorkspacePane(L"editor");
+            page->_ToggleWorkspacePane(L"terminal");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->TabContent().Visibility());
+            VERIFY_ARE_EQUAL(document, page->_workspaceDocuments.front().id);
+            page->_ToggleWorkspacePane(L"terminal");
+            page->_ToggleWorkspacePane(L"editor");
+            VERIFY_IS_TRUE(page->_GetActiveControl().Focus(FocusState::Programmatic));
+            page->_ToggleWorkspacePane(L"terminal");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->TabContent().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(Input::FocusManager::GetFocusedElement(page->XamlRoot()) == page->_workspaceHomeButton);
+
+            // The same visible Home button receives focus when the editor is
+            // the last content pane hidden, in either tab position.
+            page->_ToggleWorkspacePane(L"editor");
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(page->WorkspaceEditorSurface().Child().as<Button>().Focus(FocusState::Programmatic));
+            page->_ToggleWorkspacePane(L"editor");
+            page->UpdateLayout();
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->TabContent().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_IS_TRUE(Input::FocusManager::GetFocusedElement(page->XamlRoot()) == page->_workspaceHomeButton);
         });
     }
 
@@ -2187,6 +2474,7 @@ namespace TerminalAppLocalTests
         VERIFY_SUCCEEDED(TestData::TryGetValue(L"compact", compact));
         const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
         TestOnUIThread([&]() {
+            page->SetWorkspaceEditorEnabled(true);
             GUID unique{};
             VERIFY_SUCCEEDED(CoCreateGuid(&unique));
             const auto file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".txt");
@@ -2206,15 +2494,10 @@ namespace TerminalAppLocalTests
             page->_OpenWorkspaceDocument(file, true);
             const auto verifyPreviewFocus = [&]() {
                 VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
-                VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
-                for (const auto& tab : page->_tabs)
-                {
-                    VERIFY_ARE_EQUAL(FocusState::Unfocused, page->_GetTabImpl(tab)->_focusState);
-                }
-                if (compact)
-                {
-                    VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
-                }
+                VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceEditorSurface().Visibility());
+                VERIFY_IS_FALSE(page->_FindWorkspace(page->_activeWorkspaceId)->preferTerminalFocus);
+                VERIFY_IS_TRUE(page->_FindWorkspace(page->_activeWorkspaceId)->selectedDocument == file);
+                VERIFY_ARE_EQUAL(page->_GetFocusedTab() ? Visibility::Visible : Visibility::Collapsed, page->TabContent().Visibility());
             };
             background.Close();
             VERIFY_IS_TRUE(page->_GetFocusedTab() == selected);
@@ -2238,119 +2521,88 @@ namespace TerminalAppLocalTests
         const auto page = _commonSetup(sideTabs ? TabPosition::Left : TabPosition::Top);
         std::filesystem::path first;
         std::filesystem::path second;
-        ScrollViewer scroll{ nullptr };
+        winrt::hstring activeId;
+        winrt::event_token bridgeToken{};
+        std::vector<winrt::hstring> activeReplays;
         const auto cleanup = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() { page->WorkspaceEditorMessage(bridgeToken); });
             std::error_code error;
             std::filesystem::remove(first, error);
             std::filesystem::remove(second, error);
         });
         TestOnUIThread([&]() {
+            page->SetWorkspaceEditorEnabled(true);
+            page->_workspaceEditorSession.Connected();
+            bridgeToken = page->WorkspaceEditorMessage([&](auto&&, const winrt::hstring& serialized) {
+                using namespace winrt::Windows::Data::Json;
+                const auto message = JsonObject::Parse(serialized);
+                if (message.GetNamedString(L"type", L"") == L"flush")
+                {
+                    JsonObject acknowledgement;
+                    acknowledgement.Insert(L"version", JsonValue::CreateNumberValue(1));
+                    acknowledgement.Insert(L"type", JsonValue::CreateStringValue(L"flushed"));
+                    acknowledgement.Insert(L"requestId", JsonValue::CreateStringValue(message.GetNamedString(L"requestId")));
+                    page->HandleWorkspaceEditorMessage(acknowledgement.Stringify());
+                }
+                else if (message.GetNamedString(L"type", L"") == L"open" && message.GetNamedString(L"id", L"") == activeId)
+                {
+                    activeReplays.push_back(serialized);
+                }
+            });
             GUID unique{};
             VERIFY_SUCCEEDED(CoCreateGuid(&unique));
             const auto folder = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() };
             first = folder / (std::wstring{ winrt::to_hstring(unique) } + L"-A.txt");
             second = folder / (std::wstring{ winrt::to_hstring(unique) } + L"-B.txt");
-            {
-                std::ofstream file{ first };
-                for (auto i = 0; i < 200; ++i)
-                {
-                    file << "active document line\n";
-                }
-            }
+            std::ofstream{ first } << "active document line\n";
             std::ofstream{ second } << "background document";
             page->WorkspaceContentArea().Width(1000);
-            page->WorkspaceDocumentEditor().Height(200);
-            page->UpdateLayout();
             page->_OpenWorkspaceDocument(first, true);
             page->_OpenWorkspaceDocument(second, true);
-            page->WorkspaceDocumentTabs().SelectedItem(page->_workspaceDocuments.front().tab);
             page->UpdateLayout();
-            page->WorkspaceDocumentEditor().Document().Selection().SetRange(10, 20);
-            std::vector<DependencyObject> pending{ page->WorkspaceDocumentEditor() };
-            while (!pending.empty() && !scroll)
-            {
-                const auto element = pending.back();
-                pending.pop_back();
-                scroll = element.try_as<ScrollViewer>();
-                for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(element); ++i)
-                {
-                    pending.push_back(Media::VisualTreeHelper::GetChild(element, i));
-                }
-            }
-            VERIFY_IS_NOT_NULL(scroll);
+            page->WorkspaceDocumentTabs().SelectedItem(page->_workspaceDocuments.front().tab);
         });
-        bool hasScroll = false;
-        for (auto attempt = 0; attempt < 100 && !hasScroll; ++attempt)
-        {
-            TestOnUIThread([&]() {
-                page->UpdateLayout();
-                hasScroll = scroll.ScrollableHeight() > 100;
-            });
-            if (!hasScroll)
-            {
-                Sleep(10);
-            }
-        }
-        VERIFY_IS_TRUE(hasScroll);
+        _WaitForWorkspaceDocuments(page);
         TestOnUIThread([&]() {
-            page->WorkspaceDocumentEditor().Document().Selection().SetRange(10, 20);
-            scroll.ChangeView(nullptr, 100.0, nullptr, true);
-        });
-        for (auto attempt = 0; attempt < 100; ++attempt)
-        {
-            bool scrolled = false;
-            TestOnUIThread([&]() { scrolled = scroll.VerticalOffset() > 0; });
-            if (scrolled)
-            {
-                break;
-            }
-            Sleep(10);
-        }
-        double offset = 0;
-        TestOnUIThread([&]() {
-            offset = scroll.VerticalOffset();
-            VERIFY_IS_TRUE(offset > 0);
-            VERIFY_ARE_EQUAL(10, page->WorkspaceDocumentEditor().Document().Selection().StartPosition());
-            VERIFY_ARE_EQUAL(20, page->WorkspaceDocumentEditor().Document().Selection().EndPosition());
-            std::ofstream{ first } << "changed on disk; background close must retain the active preview";
-            const auto background = page->_workspaceDocuments.back().tab;
-            Button close{ nullptr };
-            std::vector<DependencyObject> pending{ background };
-            while (!pending.empty() && !close)
-            {
-                const auto element = pending.back();
-                pending.pop_back();
-                if (const auto button = element.try_as<Button>(); button && button.Name() == L"CloseButton")
-                {
-                    close = button;
-                }
-                for (auto i = 0; i < Media::VisualTreeHelper::GetChildrenCount(element); ++i)
-                {
-                    pending.push_back(Media::VisualTreeHelper::GetChild(element, i));
-                }
-            }
-            VERIFY_IS_NOT_NULL(close);
-            Automation::Peers::ButtonAutomationPeer peer{ close };
-            peer.GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
-        });
-        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(first == page->_FindWorkspace(page->_activeWorkspaceId)->selectedDocument);
+            activeId = page->_workspaceDocuments.front().id;
+            auto& model = page->_workspaceDocuments.front().model;
+            VERIFY_IS_TRUE(model.UpdateText(L"unsaved active buffer\n", 1));
+            const auto baseline = model.baseline;
+            activeReplays.clear();
+            std::ofstream{ first } << "changed on disk; retain the unsaved active buffer";
+            const auto backgroundId = page->_workspaceDocuments.back().id;
+            page->_CloseWorkspaceDocument(backgroundId);
             VERIFY_ARE_EQUAL(1u, page->WorkspaceDocumentTabs().TabItems().Size());
             VERIFY_IS_TRUE(first == page->_FindWorkspace(page->_activeWorkspaceId)->selectedDocument);
-            const auto document = page->WorkspaceDocumentEditor().Document();
-            VERIFY_ARE_EQUAL(10, document.Selection().StartPosition());
-            VERIFY_ARE_EQUAL(20, document.Selection().EndPosition());
-            VERIFY_ARE_EQUAL(offset, scroll.VerticalOffset());
-            winrt::hstring text;
-            document.GetText(TextGetOptions::None, text);
-            VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"active document line"));
-            // Closing the selected tab invalidates the preview. Reopening it
-            // must read the file again, even though its path is the same.
-            page->_workspaceDocuments.clear();
-            page->_FindWorkspace(page->_activeWorkspaceId)->selectedDocument.clear();
-            page->_RefreshWorkspaceDocumentTabs();
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.text == L"unsaved active buffer\n");
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.Dirty());
+            VERIFY_ARE_EQUAL(activeId, page->_workspaceDocuments.front().id);
+            VERIFY_ARE_EQUAL(1ull, page->_workspaceDocuments.front().model.revision);
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.baseline == baseline);
+            // WinUI can replay selection when its TabView collection changes.
+            // An existing Monaco model ignores this identity-preserving open;
+            // every replay must retain the native unsaved snapshot too.
+            for (const auto& serialized : activeReplays)
+            {
+                const auto replay = winrt::Windows::Data::Json::JsonObject::Parse(serialized);
+                VERIFY_ARE_EQUAL(L"unsaved active buffer\n", replay.GetNamedString(L"text"));
+                VERIFY_IS_TRUE(replay.GetNamedBoolean(L"dirty"));
+                VERIFY_ARE_EQUAL(1.0, replay.GetNamedNumber(L"revision"));
+            }
+            // Discarding and reopening the selected document establishes a fresh
+            // disk baseline. A background close must never reload that buffer.
+            const auto presenter = winrt::make_self<WorkspaceDialogPresenter>();
+            presenter->result = ContentDialogResult::Secondary;
+            page->_dialogPresenter = winrt::make_weak(presenter.as<winrt::TerminalApp::IDialogPresenter>());
+            page->_CloseWorkspaceDocument(activeId);
+            VERIFY_IS_TRUE(page->_workspaceDocuments.empty());
             page->_OpenWorkspaceDocument(first, true);
-            document.GetText(TextGetOptions::None, text);
-            VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"changed on disk"));
+        });
+        _WaitForWorkspaceDocuments(page);
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.text.starts_with(L"changed on disk"));
+            VERIFY_IS_FALSE(page->_workspaceDocuments.front().model.Dirty());
         });
     }
 
@@ -2395,71 +2647,55 @@ namespace TerminalAppLocalTests
         const auto page = _commonSetup();
         std::filesystem::path file;
         winrt::hstring workspaceA;
+        winrt::hstring lastTheme;
+        winrt::event_token bridgeToken{};
         const auto cleanup = wil::scope_exit([&]() noexcept {
+            RunOnUIThread([&]() { page->WorkspaceEditorMessage(bridgeToken); });
             std::error_code error;
             std::filesystem::remove(file, error);
         });
         TestOnUIThread([&]() {
+            page->SetWorkspaceEditorEnabled(true);
+            page->_workspaceEditorSession.Connected();
+            bridgeToken = page->WorkspaceEditorMessage([&](auto&&, const winrt::hstring& serialized) {
+                const auto message = winrt::Windows::Data::Json::JsonObject::Parse(serialized);
+                if (message.GetNamedString(L"type", L"") == L"theme")
+                {
+                    lastTheme = message.GetNamedString(L"theme");
+                }
+            });
             GUID unique{};
             VERIFY_SUCCEEDED(CoCreateGuid(&unique));
             file = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / (std::wstring{ winrt::to_hstring(unique) } + L".cpp");
-            std::ofstream{ file } << "int value = 42; // preview\n";
+            std::ofstream{ file } << "int value = 42; // editor\n";
             workspaceA = page->_activeWorkspaceId;
             page->RequestedTheme(ElementTheme::Dark);
-            page->UpdateLayout();
             page->_OpenWorkspaceDocument(file, true);
-            page->UpdateLayout();
-            // Change theme while the first palette's asynchronous batches may
-            // still be pending. Those batches must not overwrite the new one.
-            page->RequestedTheme(ElementTheme::Light);
-            page->UpdateLayout();
         });
-        const auto verifyPalette = [&](bool dark, bool verifySelection) {
-            const auto bodyColor = dark ? winrt::Windows::UI::Color{ 255, 212, 212, 212 } : winrt::Windows::UI::Color{ 255, 32, 32, 32 };
-            const auto keywordColor = dark ? winrt::Windows::UI::Color{ 255, 86, 156, 214 } : winrt::Windows::UI::Color{ 255, 0, 0, 180 };
-            auto applied = false;
-            for (auto attempt = 0; attempt < 200 && !applied; ++attempt)
+        _WaitForWorkspaceDocuments(page);
+        TestOnUIThread([&]() {
+            auto& model = page->_workspaceDocuments.front().model;
+            VERIFY_IS_TRUE(model.UpdateText(L"int value = 99; // unsaved\n", 1));
+            for (const auto theme : { ElementTheme::Light, ElementTheme::Dark })
             {
-                TestOnUIThread([&]() {
-                    const auto document = page->WorkspaceDocumentEditor().Document();
-                    applied = document.GetRange(4, 5).CharacterFormat().ForegroundColor() == bodyColor &&
-                              document.GetRange(0, 1).CharacterFormat().ForegroundColor() == keywordColor;
-                });
-                if (!applied)
-                {
-                    Sleep(10);
-                }
+                page->RequestedTheme(theme);
+                page->UpdateLayout();
+                page->_ApplyWorkspaceDocumentTheme();
+                VERIFY_ARE_EQUAL(theme == ElementTheme::Light ? L"vs" : L"vs-dark", lastTheme);
+                VERIFY_IS_TRUE(model.text == L"int value = 99; // unsaved\n");
+                VERIFY_IS_TRUE(model.Dirty());
+                VERIFY_IS_FALSE(model.readOnly);
             }
-            VERIFY_IS_TRUE(applied);
-            TestOnUIThread([&]() {
-                const auto document = page->WorkspaceDocumentEditor().Document();
-                if (verifySelection)
-                {
-                    VERIFY_ARE_EQUAL(4, document.Selection().StartPosition());
-                    VERIFY_ARE_EQUAL(9, document.Selection().EndPosition());
-                }
-                VERIFY_IS_TRUE(page->WorkspaceDocumentEditor().IsReadOnly());
-                winrt::hstring text;
-                document.GetText(TextGetOptions::None, text);
-                VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"int value = 42; // preview"));
-            });
-        };
-        verifyPalette(false, false);
-        TestOnUIThread([&]() {
-            page->WorkspaceDocumentEditor().Document().Selection().SetRange(4, 9);
-            VERIFY_ARE_EQUAL(4, page->WorkspaceDocumentEditor().Document().Selection().StartPosition());
-            page->RequestedTheme(ElementTheme::Dark);
-            page->UpdateLayout();
-        });
-        verifyPalette(true, true);
-        TestOnUIThread([&]() {
             page->_SwitchWorkspace(L"preview-theme-B", false);
             std::ofstream{ file } << "externally changed";
             page->RequestedTheme(ElementTheme::Light);
             page->UpdateLayout();
             page->_SwitchWorkspace(workspaceA, false);
+            page->_ApplyWorkspaceDocumentTheme();
+            VERIFY_ARE_EQUAL(L"vs", lastTheme);
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.text == L"int value = 99; // unsaved\n");
+            VERIFY_IS_TRUE(page->_workspaceDocuments.front().model.Dirty());
         });
-        verifyPalette(false, true);
     }
 
     void TabTests::WorkspaceNavigationCloseButtonHover()
@@ -2512,47 +2748,39 @@ namespace TerminalAppLocalTests
     void TabTests::WorkspaceExplorerContext()
     {
         const auto page = _commonSetup();
+        std::filesystem::path root;
+        std::filesystem::path file;
+        winrt::hstring workspaceId;
+        winrt::hstring documentId;
+        winrt::Microsoft::UI::Xaml::Controls::TreeViewNode treeRoot{ nullptr };
+        winrt::Microsoft::UI::Xaml::Controls::TreeViewNode directory{ nullptr };
+        winrt::Microsoft::UI::Xaml::Controls::TreeViewNode fileNode{ nullptr };
+        const auto cleanup = wil::scope_exit([&]() noexcept {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        });
         TestOnUIThread([&]() {
+            page->SetWorkspaceEditorEnabled(true);
             GUID unique{};
             VERIFY_SUCCEEDED(CoCreateGuid(&unique));
-            const auto root = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / winrt::to_hstring(unique).c_str();
-            const auto cleanup = wil::scope_exit([&]() noexcept {
-                std::error_code error;
-                std::filesystem::remove_all(root, error);
-            });
+            root = std::filesystem::path{ winrt::Windows::Storage::ApplicationData::Current().TemporaryFolder().Path().c_str() } / winrt::to_hstring(unique).c_str();
             std::filesystem::create_directories(root / L"nested");
-            const auto file = root / L"nested" / L"context.txt";
-            std::ofstream{ file } << "original preview\nsecond line";
-            const winrt::hstring workspaceId{ root.native() };
+            file = root / L"nested" / L"context.txt";
+            std::ofstream{ file } << "original editor\nsecond line";
+            workspaceId = winrt::hstring{ root.native() };
             page->_SwitchWorkspace(workspaceId);
-            const auto treeRoot = page->WorkspaceFileTree().RootNodes().GetAt(0);
-            const auto directory = treeRoot.Children().GetAt(0);
+            treeRoot = page->WorkspaceFileTree().RootNodes().GetAt(0);
+            directory = treeRoot.Children().GetAt(0);
             page->_PopulateWorkspaceFileNode(directory);
             directory.IsExpanded(true);
-            const auto fileNode = directory.Children().GetAt(0);
+            fileNode = directory.Children().GetAt(0);
             page->WorkspaceFileTree().SelectedNode(fileNode);
-            page->UpdateLayout();
-            const auto container = page->WorkspaceFileTree().ContainerFromNode(fileNode);
-            VERIFY_IS_NOT_NULL(container);
-            const auto hasFileLabel = [&](const auto& self, const DependencyObject& element) -> bool {
-                if (const auto text = element.try_as<TextBlock>(); text && text.Text() == L"context.txt")
-                {
-                    return true;
-                }
-                using winrt::Windows::UI::Xaml::Media::VisualTreeHelper;
-                for (int32_t i = 0; i < VisualTreeHelper::GetChildrenCount(element); ++i)
-                {
-                    if (self(self, VisualTreeHelper::GetChild(element, i)))
-                    {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            VERIFY_IS_TRUE(hasFileLabel(hasFileLabel, container));
             page->_OpenWorkspaceDocument(file, true);
-            VERIFY_ARE_NOT_EQUAL(FocusState::Unfocused, page->WorkspaceDocumentEditor().FocusState());
-            page->WorkspaceDocumentEditor().Document().Selection().SetRange(3, 8);
+            documentId = page->_workspaceDocuments.front().id;
+        });
+        _WaitForWorkspaceDocuments(page);
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(page->_FindWorkspaceDocument(documentId)->model.UpdateText(L"unsaved context edit\nsecond line", 1));
             page->WorkspaceFileSearchBox().Text(L"context");
             page->_SwitchWorkspace(L"context-test-other", false);
             std::ofstream{ file } << "externally changed";
@@ -2561,14 +2789,9 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(directory.IsExpanded());
             VERIFY_IS_TRUE(page->WorkspaceFileTree().SelectedNode() == fileNode);
             VERIFY_ARE_EQUAL(L"context", page->WorkspaceFileSearchBox().Text());
-            winrt::hstring text;
-            page->WorkspaceDocumentEditor().Document().GetText(TextGetOptions::None, text);
-            VERIFY_IS_TRUE(std::wstring_view{ text }.starts_with(L"original preview"));
-            VERIFY_ARE_EQUAL(3, page->WorkspaceDocumentEditor().Document().Selection().StartPosition());
-            VERIFY_ARE_EQUAL(8, page->WorkspaceDocumentEditor().Document().Selection().EndPosition());
+            VERIFY_IS_TRUE(page->_FindWorkspaceDocument(documentId)->model.text == L"unsaved context edit\nsecond line");
+            VERIFY_IS_TRUE(page->_FindWorkspaceDocument(documentId)->model.Dirty());
             page->WorkspaceFileSearchBox().Text(L"");
-            VERIFY_IS_TRUE(page->WorkspaceFileTree().RootNodes().GetAt(0) == treeRoot);
-            VERIFY_IS_TRUE(directory.IsExpanded());
             for (auto i = 0; i < 5; ++i)
             {
                 page->_SwitchWorkspace(L"context-test-other", false);
@@ -2578,22 +2801,20 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_TRUE(page->WorkspaceFileTree().RootNodes().GetAt(0) == treeRoot);
                 VERIFY_IS_TRUE(directory.IsExpanded());
                 VERIFY_IS_TRUE(page->WorkspaceFileTree().SelectedNode() == fileNode);
+                VERIFY_IS_TRUE(page->_FindWorkspaceDocument(documentId)->model.Dirty());
             }
-            // In a narrow window, explicit terminal navigation must reveal the
-            // terminal instead of leaving the document covering its content.
             page->WorkspaceContentArea().Width(480);
             page->UpdateLayout();
             page->_OpenWorkspaceDocument(file, true);
-            VERIFY_ARE_EQUAL(0.0, page->WorkspaceTerminalColumn().Width().Value);
-            const auto terminalIndex = page->_GetFocusedTabIndex().value();
-            page->_SelectTab(0);
-            page->_SelectTab(terminalIndex);
-            VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceDocumentPanel().Visibility());
-            VERIFY_ARE_EQUAL(GridUnitType::Star, page->WorkspaceTerminalColumn().Width().GridUnitType);
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
+            page->FocusActiveTerminal();
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, page->TabContent().Visibility());
             page->_GetFocusedTab().Close();
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceFilesPanel().Visibility());
             VERIFY_ARE_EQUAL(Visibility::Visible, page->WorkspaceDocumentPanel().Visibility());
             VERIFY_ARE_EQUAL(Visibility::Collapsed, page->WorkspaceHub().Visibility());
+            VERIFY_IS_TRUE(page->_FindWorkspaceDocument(documentId)->model.Dirty());
             page->WorkspaceContentArea().Width(NAN);
         });
     }
@@ -3774,4 +3995,67 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::WorkspaceKeyBindingRouting()
+    {
+        const auto page = _commonSetup(TabPosition::Left);
+        TestOnUIThread([&]() {
+            using winrt::Microsoft::Terminal::Control::KeyChord;
+            const auto originalDispatch = page->_actionDispatch;
+            const auto restore = wil::scope_exit([&]() noexcept { page->_actionDispatch = originalDispatch; });
+            page->_actionDispatch = winrt::make_self<winrt::TerminalApp::implementation::ShortcutActionDispatch>();
+            uint32_t workspaceActions{};
+            uint32_t terminalActions{};
+            const auto workspaceHandler = [&](auto&&, const ActionEventArgs& args) {
+                ++workspaceActions;
+                args.Handled(true);
+            };
+            page->_actionDispatch->ToggleWorkspaceFiles(workspaceHandler);
+            page->_actionDispatch->ToggleWorkspaceTerminal(workspaceHandler);
+            page->_actionDispatch->ToggleWorkspaceEditor(workspaceHandler);
+            page->_actionDispatch->ToggleWorkspaceTabs(workspaceHandler);
+            page->_actionDispatch->OpenWorkspaceLayout(workspaceHandler);
+            page->_actionDispatch->OpenSettings(workspaceHandler);
+            page->_actionDispatch->SendInput([&](auto&&, const ActionEventArgs& args) {
+                ++terminalActions;
+                args.Handled(true);
+            });
+            constexpr std::array actions{
+                ShortcutAction::ToggleWorkspaceFiles,
+                ShortcutAction::ToggleWorkspaceTerminal,
+                ShortcutAction::ToggleWorkspaceEditor,
+                ShortcutAction::ToggleWorkspaceTabs,
+                ShortcutAction::OpenWorkspaceLayout,
+            };
+            const auto actionMap = page->_settings.ActionMap();
+            for (size_t i = 0; i < actions.size(); ++i)
+            {
+                const KeyChord keys{ true, true, false, false, static_cast<int32_t>(VK_F5 + i), 0 };
+                const ActionAndArgs action{ actions[i], nullptr };
+                actionMap.RegisterKeyBinding(keys, action);
+                VERIFY_IS_TRUE(page->HasWorkspaceKeyBinding(keys));
+                VERIFY_IS_TRUE(page->HandleWorkspaceKeyBinding(keys));
+                for (const auto& source : { page->WorkspaceFilesPanel().as<winrt::IInspectable>(), page->WorkspaceHeader().as<winrt::IInspectable>(), page->WorkspaceNavigation().as<winrt::IInspectable>() })
+                {
+                    VERIFY_IS_TRUE(page->_DispatchKeyBinding(source, action));
+                }
+            }
+            VERIFY_ARE_EQUAL(20u, workspaceActions);
+            const KeyChord settings{ true, true, false, false, 'L', 0 };
+            actionMap.RegisterKeyBinding(settings, ActionAndArgs{ ShortcutAction::OpenSettings, OpenSettingsArgs{ SettingsTarget::Workspace } });
+            VERIFY_IS_TRUE(page->HasWorkspaceKeyBinding(settings));
+            VERIFY_IS_TRUE(page->HandleWorkspaceKeyBinding(settings));
+            const KeyChord terminal{ true, true, false, false, 'P', 0 };
+            actionMap.RegisterKeyBinding(terminal, ActionAndArgs{ ShortcutAction::SendInput, SendInputArgs{ L"must not reach the shell from Monaco" } });
+            VERIFY_IS_FALSE(page->HasWorkspaceKeyBinding(terminal));
+            VERIFY_IS_FALSE(page->HandleWorkspaceKeyBinding(terminal));
+            actionMap.RegisterKeyBinding(terminal, ActionAndArgs{ ShortcutAction::OpenSettings, OpenSettingsArgs{ SettingsTarget::SettingsFile } });
+            VERIFY_IS_FALSE(page->HasWorkspaceKeyBinding(terminal));
+            VERIFY_IS_FALSE(page->HandleWorkspaceKeyBinding(terminal));
+            VERIFY_ARE_EQUAL(21u, workspaceActions);
+            VERIFY_ARE_EQUAL(0u, terminalActions);
+            actionMap.DeleteKeyBinding(settings);
+            VERIFY_IS_FALSE(page->HasWorkspaceKeyBinding(settings));
+            VERIFY_IS_FALSE(page->HandleWorkspaceKeyBinding(settings));
+        });
+    }
 }

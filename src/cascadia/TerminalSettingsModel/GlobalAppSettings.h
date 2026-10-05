@@ -25,6 +25,7 @@ Author(s):
 #include "Theme.h"
 #include "NewTabMenuEntry.h"
 #include "RemainingProfilesEntry.h"
+#include "WorkspaceLayoutDefaults.h"
 
 // fwdecl unittest classes
 namespace SettingsModelUnitTests
@@ -81,6 +82,9 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         winrt::hstring SourceBasePath;
 
         INHERITABLE_SETTING(Model::GlobalAppSettings, hstring, UnparsedDefaultProfile, L"");
+        // WinRT exposes the canonical text to keep the layout value portable;
+        // settings.json stores it as a validated JSON object, never an escaped string.
+        INHERITABLE_SETTING_WITH_LOGGING(Model::GlobalAppSettings, hstring, WorkspaceLayout, "workspaceLayout", ::Sansterminal::WorkspaceLayout::DefaultJson);
 
 #define GLOBAL_SETTINGS_INITIALIZE(type, name, jsonKey, ...) \
     INHERITABLE_SETTING_WITH_LOGGING(Model::GlobalAppSettings, type, name, jsonKey, ##__VA_ARGS__)

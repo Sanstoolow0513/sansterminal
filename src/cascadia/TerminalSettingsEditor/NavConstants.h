@@ -20,12 +20,14 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     inline constexpr std::wstring_view globalProfileTag{ L"GlobalProfile_Nav" };
     inline constexpr std::wstring_view colorSchemesTag{ L"ColorSchemes_Nav" };
     inline constexpr std::wstring_view globalAppearanceTag{ L"GlobalAppearance_Nav" };
+    inline constexpr std::wstring_view workspaceLayoutTag{ L"WorkspaceLayout_Nav" };
 
     // Map from navigation tags to Segoe MDL2 Assets icon glyphs
     inline constexpr til::static_map NavTagIconMap{
         std::pair{ launchTag, L"\xE7B5" }, /* Set Lock Screen */
         std::pair{ interactionTag, L"\xE7C9" }, /* Touch Pointer */
         std::pair{ globalAppearanceTag, L"\xE771" }, /* Personalize */
+        std::pair{ workspaceLayoutTag, L"\xE8A9" }, /* Layout */
         std::pair{ colorSchemesTag, L"\xE790" }, /* Color */
         std::pair{ compatibilityTag, L"\xEC7A" }, /* Developer Tools */
         std::pair{ actionsTag, L"\xE765" }, /* Keyboard Classic */

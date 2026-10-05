@@ -7,7 +7,7 @@
 #include "NonClientIslandWindow.h"
 #include <ThrottledFunc.h>
 
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
 #include "EditorHostProbe.h"
 #endif
 
@@ -29,6 +29,7 @@ public:
     bool OnDirectKeyEvent(uint32_t vkey, uint8_t scanCode, bool down);
     void SetTaskbarProgress(const winrt::Windows::Foundation::IInspectable& sender, const winrt::Windows::Foundation::IInspectable& args);
     safe_void_coroutine HandleSummon(winrt::TerminalApp::SummonWindowBehavior args) const;
+    winrt::Windows::Foundation::IAsyncAction SummonWindowAsync(winrt::TerminalApp::SummonWindowBehavior args) const;
     void DispatchCommandline(winrt::TerminalApp::CommandlineArgs args);
 
 private:
@@ -41,8 +42,8 @@ private:
 
     WindowEmperor* _windowManager = nullptr;
     std::unique_ptr<IslandWindow> _window;
-#ifdef SANSTERMINAL_EDITOR_PROBE
-    std::shared_ptr<EditorHostProbe> _editorProbe;
+#ifdef SANSTERMINAL_EDITOR_HOST
+    std::shared_ptr<WorkspaceEditorHost> _editorHost;
 #endif
     winrt::TerminalApp::AppLogic _appLogic{ nullptr };
     winrt::TerminalApp::TerminalWindow _windowLogic{ nullptr };

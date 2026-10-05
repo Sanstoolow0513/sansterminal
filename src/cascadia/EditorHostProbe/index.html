@@ -3,20 +3,38 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Monaco host probe</title>
+<title>工作区文件编辑器</title>
 <link rel="stylesheet" href="editor.css">
 <style>
-  html, body { margin: 0; height: 100%; background: #1e1e1e; color: #eee; font: 13px system-ui; }
+  html, body { margin: 0; height: 100%; font: 13px system-ui; }
+  body { --background: #1e1e1e; --foreground: #eee; --button: #333; --border: #666; --accent: #87bfff; color-scheme: dark; background: var(--background); color: var(--foreground); }
+  body[data-theme="vs"] { --background: #fff; --foreground: #222; --button: #f3f3f3; --border: #999; --accent: #0066b8; color-scheme: light; }
+  body[data-theme="hc-black"] { --background: #000; --foreground: #fff; --button: #000; --border: #fff; --accent: #ffff00; }
+  body[data-theme="hc-light"] { --background: #fff; --foreground: #000; --button: #fff; --border: #000; --accent: #005fcc; color-scheme: light; }
   body { display: flex; flex-direction: column; }
   nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
-  button { color: inherit; background: #333; border: 1px solid #666; border-radius: 3px; padding: 5px 9px; }
-  button[aria-pressed="true"] { border-color: #87bfff; }
+  nav span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  [hidden] { display: none !important; }
+  button { color: inherit; background: var(--button); border: 1px solid var(--border); border-radius: 3px; padding: 5px 9px; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .45; }
+  button[aria-pressed="true"] { border-color: var(--accent); }
+  #document-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #editor { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
   #status { padding: 6px 10px; overflow-wrap: anywhere; }
 </style>
-<nav aria-label="测试文档">
-  <button id="json">项目 A / JSON</button>
-  <button id="typescript">项目 B / TypeScript</button>
+<nav id="toolbar" aria-label="验证工具">
+  <span id="scratch-tools">
+    <button id="json">项目 A / JSON</button>
+    <button id="typescript">项目 B / TypeScript</button>
+  </span>
+  <span id="workspace-tools" hidden>
+    <output id="document-name" aria-live="polite">等待选择文件</output>
+    <button id="save" disabled>保存（Ctrl+S）</button>
+    <button id="retry-load" hidden>重新读取文件</button>
+    <button id="uppercase" disabled>选区转大写</button>
+    <button id="timestamp" disabled>插入时间</button>
+  </span>
   <button id="check">运行自检</button>
   <button id="dialog">XAML 对话框</button>
   <button id="terminal">终端（F6）</button>

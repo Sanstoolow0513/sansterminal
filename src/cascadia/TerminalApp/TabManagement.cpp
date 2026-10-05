@@ -112,6 +112,9 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_InitializeTab(winrt::com_ptr<Tab> newTabImpl, uint32_t insertPosition)
     {
         _EnsureWorkspaceForTerminal();
+        // A user-created session makes a settings-only workspace permanent.
+        if (_activeWorkspaceId == _settingsTemporaryWorkspaceId)
+            _settingsTemporaryWorkspaceId.clear();
         newTabImpl->Initialize();
 
         // Push the current settings into the tab on when it's initialized.
@@ -292,6 +295,7 @@ namespace winrt::TerminalApp::implementation
         const auto activeTabCount = std::count_if(_tabs.begin(), _tabs.end(), [this](const auto& tab) {
             return _IsTabInActiveWorkspace(tab);
         });
+        const auto emptyWorkspace = !_workspaces.empty() && std::none_of(_workspaceGeometry.visible.begin(), _workspaceGeometry.visible.end(), [](const bool visible) { return visible; });
 
         // The tab row should only be visible if:
         // - we're not in focus mode
@@ -304,6 +308,7 @@ namespace winrt::TerminalApp::implementation
                                ((!sideTabs && _currentWindowSettings().ShowTabsInTitlebar()) ||
                                 (activeTabCount > 1) ||
                                 (_workspaces.size() > 1) ||
+                                _workspaceHomeRoute || emptyWorkspace ||
                                 _tabRow.ShowWorkspacesButton() ||
                                 _currentWindowSettings().AlwaysShowTabs());
 
@@ -311,6 +316,11 @@ namespace winrt::TerminalApp::implementation
         {
             // collapse/show the tabs themselves
             _tabView.Visibility(isVisible && !sideTabs ? Visibility::Visible : Visibility::Collapsed);
+            if (!sideTabs)
+            {
+                for (const auto& tab : _tabs)
+                    tab.TabViewItem().Visibility(_workspaceShowTabs && _IsTabInActiveWorkspace(tab) ? Visibility::Visible : Visibility::Collapsed);
+            }
         }
         if (_tabRow)
         {
@@ -328,7 +338,7 @@ namespace winrt::TerminalApp::implementation
                     WorkspaceHeader().Visibility(showDock ? Visibility::Visible : Visibility::Collapsed);
                     if (showDock && !wasVisible)
                     {
-                        _ShowSideTabOverlay(true);
+                        _ShowSideTabOverlay(_workspaceShowTabs);
                     }
                 }
                 if (!isVisible)
@@ -568,6 +578,7 @@ namespace winrt::TerminalApp::implementation
 
         const auto removedFromActiveWorkspace = _IsTabInActiveWorkspace(tab);
         const auto removedSelectedTab = _GetFocusedTab() == tab;
+        const auto removedSettingsTab = tab == _settingsTab;
 
         // NOTE: Workspace persistence for named windows used to live here,
         // but by the time _RemoveTab runs the pane content may already be
@@ -658,6 +669,8 @@ namespace winrt::TerminalApp::implementation
             _rearrangeFrom = std::nullopt;
             _rearrangeTo = std::nullopt;
         }
+        if (removedSettingsTab)
+            _RestoreWorkspaceAfterSettingsClose(removedSelectedTab);
         _RefreshWorkspaceNavigation();
         _SyncWorkspaceNavigationSelection();
         _UpdateWorkspaceDocumentLayout();
@@ -1244,7 +1257,7 @@ namespace winrt::TerminalApp::implementation
             workspace->lastFocused = tab;
             if (activateTerminal)
             {
-                workspace->preferTerminalInCompactView = true;
+                workspace->preferTerminalFocus = true;
             }
         }
         _UpdateWorkspaceDocumentLayout();
@@ -1463,20 +1476,19 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_FocusWorkspaceContent(const winrt::TerminalApp::Tab& tab)
     {
         // Passive selection must preserve document focus when both panes are
-        // visible, and must never focus a terminal hidden by compact layout.
+        // visible, and must never focus a terminal hidden by the visibility switch.
         const auto workspace = _FindWorkspace(_activeWorkspaceId);
-        const auto terminalWidth = WorkspaceTerminalColumn().Width();
         if (WorkspaceHub().Visibility() == Visibility::Visible)
         {
             WorkspaceHubNewButton().Focus(FocusState::Programmatic);
         }
         else if (WorkspaceDocumentPanel().Visibility() == Visibility::Visible &&
-                 (!tab || (workspace && !workspace->preferTerminalInCompactView) ||
-                  (terminalWidth.GridUnitType == GridUnitType::Pixel && terminalWidth.Value == 0)))
+                 (!tab || (workspace && !workspace->preferTerminalFocus) ||
+                  TabContent().Visibility() == Visibility::Collapsed))
         {
-            WorkspaceDocumentEditor().Focus(FocusState::Programmatic);
+            _FocusWorkspaceDocument();
         }
-        else if (tab)
+        else if (tab && TabContent().Visibility() == Visibility::Visible)
         {
             tab.Focus(FocusState::Programmatic);
             // Tab::Focus handles terminal controls. Other pane content still
@@ -1488,6 +1500,10 @@ namespace winrt::TerminalApp::implementation
                     content.Focus(FocusState::Programmatic);
                 }
             }
+        }
+        else
+        {
+            _workspaceHomeButton.Focus(FocusState::Programmatic);
         }
     }
 
@@ -1534,7 +1550,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto tab = _GetFocusedTab(); tab && _GetActiveControl())
         {
-            // Explicit tab activation reveals the terminal in compact view,
+            // Explicit tab activation reuses the existing terminal session,
             // then Tab::Focus restores the tab's active pane.
             FocusTab(tab);
         }

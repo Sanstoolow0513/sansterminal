@@ -86,10 +86,11 @@ AppHost::AppHost(WindowEmperor* manager, const winrt::TerminalApp::AppLogic& log
 
 bool AppHost::OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down)
 {
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
     // The XAML focus tree still remembers the terminal while the native
     // browser owns focus. Do not deliver its shortcuts to that stale target.
-    if (_editorProbe && _editorProbe->HasFocus()) return false;
+    if (_editorHost && _editorHost->HasFocus())
+        return false;
 #endif
     if (_windowLogic)
     {
@@ -325,26 +326,26 @@ void AppHost::Initialize()
 
     // Set up the content of the application. If the app has a custom titlebar,
     // set that content as well.
-#ifdef SANSTERMINAL_EDITOR_PROBE
+#ifdef SANSTERMINAL_EDITOR_HOST
     wchar_t probeEnabled[2]{};
-    if (GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1')
-    {
-        _editorProbe = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
-        _window->SetContent(_editorProbe->CreateContent());
-    }
+    const auto scratchProbe = GetEnvironmentVariableW(L"SANSTERMINAL_EDITOR_PROBE", probeEnabled, ARRAYSIZE(probeEnabled)) == 1 && probeEnabled[0] == L'1';
+    if (scratchProbe)
+        _editorHost = std::make_shared<EditorHostProbe>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
     else
+        _editorHost = std::make_shared<WorkspaceEditorHost>(_window->GetHandle(), _window->GetInteropHandle(), _windowLogic, [this]() { _window->FocusContent(); });
+    _window->SetContent(_editorHost->CreateContent());
+#else
+    _window->SetContent(_windowLogic.GetRoot());
 #endif
-    {
-        _window->SetContent(_windowLogic.GetRoot());
-    }
     _window->OnAppInitialized();
 }
 
 void AppHost::Close()
 {
-#ifdef SANSTERMINAL_EDITOR_PROBE
-    if (_editorProbe) _editorProbe->Close();
-    _editorProbe.reset();
+#ifdef SANSTERMINAL_EDITOR_HOST
+    if (_editorHost)
+        _editorHost->Close();
+    _editorHost.reset();
 #endif
     // After calling _window->Close() we should avoid creating more WinUI related actions.
     // I suspect WinUI wouldn't like that very much. As such unregister all event handlers first.
@@ -905,45 +906,37 @@ void AppHost::_WindowActivated(bool activated)
 
 safe_void_coroutine AppHost::HandleSummon(const winrt::TerminalApp::SummonWindowBehavior args) const
 {
-    _window->SummonWindow(args);
+    co_await SummonWindowAsync(args);
+}
 
-    if (!args || !args.MoveToCurrentDesktop())
+winrt::Windows::Foundation::IAsyncAction AppHost::SummonWindowAsync(const winrt::TerminalApp::SummonWindowBehavior args) const
+{
+    const auto lifetime = shared_from_this();
+    const auto dispatcher = _windowLogic.GetRoot().Dispatcher();
+    const auto hwnd = _window->GetHandle();
+    const auto desktopManager = args && args.MoveToCurrentDesktop() ? getDesktopManager() : nullptr;
+    if (desktopManager)
     {
-        co_return;
-    }
+        // IVirtualDesktopManager is cross-process COM into explorer.exe.
+        // Complete the desktop move off the UI thread before activating the
+        // window, so callers can await a reachable close confirmation.
+        co_await winrt::resume_background();
 
-    const auto desktopManager = getDesktopManager();
-    if (!desktopManager)
-    {
-        co_return;
-    }
-
-    // Just like AppHost::GetVirtualDesktopId:
-    // IVirtualDesktopManager is cross-process COM into explorer.exe,
-    // and we can't use that on the UI thread.
-    co_await winrt::resume_background();
-
-    // First thing - make sure that we're not on the current desktop. If
-    // we are, then don't call MoveWindowToDesktop. This is to mitigate
-    // MSFT:33035972
-    BOOL onCurrentDesktop{ false };
-    if (SUCCEEDED(desktopManager->IsWindowOnCurrentVirtualDesktop(_window->GetHandle(), &onCurrentDesktop)) && onCurrentDesktop)
-    {
-        // If we succeeded, and the window was on the current desktop, then do nothing.
-    }
-    else
-    {
-        // Here, we either failed to check if the window is on the
-        // current desktop, or it wasn't on that desktop. In both those
-        // cases, just move the window.
-
-        GUID currentlyActiveDesktop{ 0 };
-        if (VirtualDesktopUtils::GetCurrentVirtualDesktopId(&currentlyActiveDesktop))
+        // Avoid moving a window that's already on this desktop (MSFT:33035972).
+        BOOL onCurrentDesktop{ false };
+        if (FAILED(desktopManager->IsWindowOnCurrentVirtualDesktop(hwnd, &onCurrentDesktop)) || !onCurrentDesktop)
         {
-            LOG_IF_FAILED(desktopManager->MoveWindowToDesktop(_window->GetHandle(), currentlyActiveDesktop));
+            GUID currentlyActiveDesktop{};
+            if (VirtualDesktopUtils::GetCurrentVirtualDesktopId(&currentlyActiveDesktop))
+            {
+                LOG_IF_FAILED(desktopManager->MoveWindowToDesktop(hwnd, currentlyActiveDesktop));
+            }
         }
-        // If GetCurrentVirtualDesktopId failed, then just leave the window
-        // where it is. Nothing else to be done :/
+        co_await wil::resume_foreground(dispatcher);
+    }
+    if (IsWindow(hwnd))
+    {
+        _window->SummonWindow(args);
     }
 }
 
@@ -1118,7 +1111,7 @@ void AppHost::_IsQuakeWindowChanged(const winrt::Windows::Foundation::IInspectab
 void AppHost::_RequestQuitAll(const winrt::Windows::Foundation::IInspectable&,
                               const winrt::Windows::Foundation::IInspectable&)
 {
-    PostQuitMessage(0);
+    _windowManager->RequestQuitAll();
 }
 
 void AppHost::_ShowWindowChanged(const winrt::Windows::Foundation::IInspectable&,

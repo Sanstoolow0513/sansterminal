@@ -74,6 +74,11 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_SETTING(Boolean, AllowHeadless);
         INHERITABLE_SETTING(Boolean, EnableColorSelection);
         INHERITABLE_SETTING(ConfirmOnClose, ConfirmOnClose);
+        INHERITABLE_SETTING(String, WorkspaceLayout);
+        INHERITABLE_SETTING(Boolean, WorkspaceShowFiles);
+        INHERITABLE_SETTING(Boolean, WorkspaceShowTerminal);
+        INHERITABLE_SETTING(Boolean, WorkspaceShowEditor);
+        INHERITABLE_SETTING(Boolean, WorkspaceShowTabs);
 
         // ---- Color schemes ----
         Windows.Foundation.Collections.IMapView<String, ColorScheme> ColorSchemes();

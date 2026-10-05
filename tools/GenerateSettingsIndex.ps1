@@ -64,6 +64,11 @@ $ClassMap = @{
         NavigationParam = "GlobalAppearance_Nav"
         SubPage         = "BreadcrumbSubPage::None"
     }
+    "Microsoft::Terminal::Settings::Editor::WorkspaceLayoutPage" = @{
+        ResourceName    = "Nav_WorkspaceLayout/Content"
+        NavigationParam = "WorkspaceLayout_Nav"
+        SubPage         = "BreadcrumbSubPage::None"
+    }
     "Microsoft::Terminal::Settings::Editor::ColorSchemes" = @{
         ResourceName    = "Nav_ColorSchemes/Content"
         NavigationParam = "ColorSchemes_Nav"

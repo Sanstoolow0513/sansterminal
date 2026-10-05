@@ -286,3 +286,6 @@ profiles.json
 
 # MSBuildCache
 /MSBuildCacheLogs/
+
+# Local WebView editor verification logs, screenshots and state backups.
+/build/webview-editor-*

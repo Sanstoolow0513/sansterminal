@@ -1,0 +1,73 @@
+<!-- Copyright (c) Sansterminal contributors. Licensed under the MIT license. -->
+<Page x:Class="Microsoft.Terminal.Settings.Editor.WorkspaceLayoutPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:local="using:Microsoft.Terminal.Settings.Editor"
+      AutomationProperties.AutomationId="WorkspaceLayoutPage">
+    <Page.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="CommonResources.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Page.Resources>
+    <StackPanel Style="{StaticResource SettingsStackStyle}">
+        <TextBlock x:Uid="WorkspaceLayoutDescription" TextWrapping="Wrap" />
+        <Border Margin="0,12,0,16" Padding="8" BorderThickness="1"
+                BorderBrush="{ThemeResource SystemControlForegroundBaseLowBrush}">
+            <Canvas x:Name="WorkspaceLayoutPreview" Height="250" MinWidth="280"
+                    AutomationProperties.AutomationId="WorkspaceLayoutPreview"
+                    SizeChanged="PreviewSizeChanged" />
+        </Border>
+        <TextBlock x:Uid="WorkspaceLayoutVisibilityHeading" Style="{StaticResource TextBlockSubHeaderStyle}" Margin="0,0,0,8" />
+        <Grid ColumnSpacing="12" RowSpacing="8" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <ToggleSwitch x:Name="WorkspaceShowFiles" x:Uid="WorkspaceShowFilesLabel"
+                          AutomationProperties.AutomationId="WorkspaceShowFiles" Toggled="VisibilityToggled" />
+            <ToggleSwitch x:Name="WorkspaceShowTerminal" x:Uid="WorkspaceShowTerminalLabel" Grid.Column="1"
+                          AutomationProperties.AutomationId="WorkspaceShowTerminal" Toggled="VisibilityToggled" />
+            <ToggleSwitch x:Name="WorkspaceShowEditor" x:Uid="WorkspaceShowEditorLabel" Grid.Row="1"
+                          AutomationProperties.AutomationId="WorkspaceShowEditor" Toggled="VisibilityToggled" />
+            <ToggleSwitch x:Name="WorkspaceShowTabs" x:Uid="WorkspaceShowTabsLabel" Grid.Row="1" Grid.Column="1"
+                          AutomationProperties.AutomationId="WorkspaceShowTabs" Toggled="VisibilityToggled" />
+        </Grid>
+        <TextBlock x:Uid="WorkspaceLayoutComposeHeading" Style="{StaticResource TextBlockSubHeaderStyle}" />
+        <Grid ColumnSpacing="8" Margin="0,8,0,8">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <ComboBox x:Name="WorkspaceLayoutSource" x:Uid="WorkspaceLayoutSourceLabel"
+                      AutomationProperties.AutomationId="WorkspaceLayoutSource" MinWidth="80" HorizontalAlignment="Stretch" SelectedIndex="2">
+                <ComboBoxItem x:Uid="WorkspacePaneFilesItem" Tag="files" />
+                <ComboBoxItem x:Uid="WorkspacePaneTerminalItem" Tag="terminal" />
+                <ComboBoxItem x:Uid="WorkspacePaneEditorItem" Tag="editor" />
+            </ComboBox>
+            <ComboBox x:Name="WorkspaceLayoutTarget" x:Uid="WorkspaceLayoutTargetLabel" Grid.Column="1"
+                      AutomationProperties.AutomationId="WorkspaceLayoutTarget" MinWidth="80" HorizontalAlignment="Stretch" SelectedIndex="1">
+                <ComboBoxItem x:Uid="WorkspacePaneFilesItem" Tag="files" />
+                <ComboBoxItem x:Uid="WorkspacePaneTerminalItem" Tag="terminal" />
+                <ComboBoxItem x:Uid="WorkspacePaneEditorItem" Tag="editor" />
+            </ComboBox>
+            <ComboBox x:Name="WorkspaceLayoutSide" x:Uid="WorkspaceLayoutSideLabel" Grid.Column="2"
+                      AutomationProperties.AutomationId="WorkspaceLayoutSide" MinWidth="80" HorizontalAlignment="Stretch" SelectedIndex="2">
+                <ComboBoxItem x:Uid="WorkspaceSideLeft" Tag="left" />
+                <ComboBoxItem x:Uid="WorkspaceSideRight" Tag="right" />
+                <ComboBoxItem x:Uid="WorkspaceSideAbove" Tag="above" />
+                <ComboBoxItem x:Uid="WorkspaceSideBelow" Tag="below" />
+            </ComboBox>
+        </Grid>
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+            <Button x:Name="WorkspaceLayoutMove" x:Uid="WorkspaceLayoutMoveLabel"
+                    AutomationProperties.AutomationId="WorkspaceLayoutMove" Click="MoveClicked" />
+            <Button x:Name="WorkspaceLayoutReset" x:Uid="WorkspaceLayoutResetLabel"
+                    AutomationProperties.AutomationId="WorkspaceLayoutReset" Click="ResetClicked" />
+        </StackPanel>
+        <TextBlock x:Name="WorkspaceLayoutFeedback" TextWrapping="Wrap" />
+        <Slider x:Name="WorkspaceLayoutRootRatio" x:Uid="WorkspaceLayoutRootRatioLabel"
+                AutomationProperties.AutomationId="WorkspaceLayoutRootRatio" Minimum="5" Maximum="95"
+                StepFrequency="0.5" ValueChanged="RatioChanged" />
+        <Slider x:Name="WorkspaceLayoutInnerRatio" x:Uid="WorkspaceLayoutInnerRatioLabel"
+                AutomationProperties.AutomationId="WorkspaceLayoutInnerRatio" Minimum="5" Maximum="95"
+                StepFrequency="0.5" ValueChanged="RatioChanged" />
+        <TextBlock x:Uid="WorkspaceLayoutShortcutHint" TextWrapping="Wrap" Margin="0,12,0,0" />
+    </StackPanel>
+</Page>

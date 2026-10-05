@@ -104,6 +104,11 @@ static constexpr std::string_view OpenAboutKey{ "openAbout" };
 static constexpr std::string_view QuickFixKey{ "quickFix" };
 static constexpr std::string_view OpenCWDKey{ "openCWD" };
 static constexpr std::string_view WorkspacesKey{ "workspaces" };
+static constexpr std::string_view ToggleWorkspaceFilesKey{ "toggleWorkspaceFiles" };
+static constexpr std::string_view ToggleWorkspaceTerminalKey{ "toggleWorkspaceTerminal" };
+static constexpr std::string_view ToggleWorkspaceEditorKey{ "toggleWorkspaceEditor" };
+static constexpr std::string_view ToggleWorkspaceTabsKey{ "toggleWorkspaceTabs" };
+static constexpr std::string_view OpenWorkspaceLayoutKey{ "openWorkspaceLayout" };
 
 static constexpr std::string_view ActionKey{ "action" };
 

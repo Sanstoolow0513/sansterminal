@@ -23,7 +23,7 @@
 
         <local:TabRowControl x:Name="TabRow"
                              Grid.Row="0"
-                             KeyUp="_KeyDownHandler" />
+                             KeyDown="_KeyDownHandler" />
 
         <StackPanel x:Name="InfoBarContainer"
                     Grid.Row="1"
@@ -43,13 +43,13 @@
             </mux:InfoBar>
         </StackPanel>
 
-        <!-- Tabs, workspace files, terminal and file preview share one window. -->
+        <!-- Persistent navigation and two exclusive content routes. -->
         <Grid x:Name="SideTabLayout"
               Grid.Row="2"
+              Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
               SizeChanged="_SideTabLayoutSizeChanged">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="SideTabColumn" Width="0" />
-                <ColumnDefinition x:Name="WorkspaceFilesColumn" Width="0" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
@@ -64,7 +64,7 @@
                                   CanDragItems="False"
                                   CanReorderItems="False"
                                   ItemInvoked="_WorkspaceNavigationInvoked"
-                                  KeyUp="_KeyDownHandler"
+                                  KeyDown="_KeyDownHandler"
                                   SelectionMode="Single">
                         <mux:TreeView.ItemContainerStyle>
                             <Style TargetType="mux:TreeViewItem">
@@ -82,64 +82,59 @@
                 </Border>
             </Grid>
 
-            <Grid x:Name="WorkspaceFilesPanel"
+            <Canvas x:Name="WorkspaceContentArea"
                   Grid.Column="1"
-                  KeyDown="_KeyDownHandler"
                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
-                  Visibility="Collapsed">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <TextBox x:Name="WorkspaceFileSearchBox"
-                         x:Uid="WorkspaceFileSearchBox"
-                         Grid.Row="0"
-                         Margin="8,8,8,4"
-                         TextChanged="_WorkspaceFileSearchChanged" />
-                <Grid Grid.Row="1">
-                    <mux:TreeView x:Name="WorkspaceFileTree"
-                                  CanDragItems="False"
-                                  CanReorderItems="False"
-                                  ItemInvoked="_WorkspaceFileInvoked"
-                                  Expanding="_WorkspaceFileExpanding"
-                                  DoubleTapped="_WorkspaceFileDoubleTapped"
-                                  SelectionMode="Single">
-                        <mux:TreeView.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal"
-                                            AutomationProperties.Name="{Binding Content[Name]}">
-                                    <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                              FontSize="14"
-                                              Glyph="{Binding Content[Glyph]}" />
-                                    <TextBlock Margin="6,0,0,0"
-                                               Text="{Binding Content[Name]}"
-                                               TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </mux:TreeView.ItemTemplate>
-                    </mux:TreeView>
-                    <ListView x:Name="WorkspaceFileSearchResults"
-                              SelectionChanged="_WorkspaceFileSearchResultSelected"
-                              DoubleTapped="_WorkspaceFileSearchResultDoubleTapped"
-                              Visibility="Collapsed" />
-                </Grid>
-                <TextBlock x:Name="WorkspaceFilesStatus"
-                           Grid.Row="2"
-                           Margin="12,4,8,8"
-                           Opacity="0.65"
-                           TextTrimming="CharacterEllipsis" />
-            </Grid>
-
-            <Grid x:Name="WorkspaceContentArea"
-                  Grid.Column="2"
                   SizeChanged="_WorkspaceContentSizeChanged">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition x:Name="WorkspaceTerminalColumn" Width="*" />
-                    <ColumnDefinition x:Name="WorkspaceDocumentColumn" Width="0" />
-                </Grid.ColumnDefinitions>
+                <Grid x:Name="WorkspaceFilesPanel"
+                      KeyDown="_KeyDownHandler"
+                      Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                      Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="WorkspaceFileSearchBox"
+                             x:Uid="WorkspaceFileSearchBox"
+                             Grid.Row="0"
+                             Margin="8,8,8,4"
+                             TextChanged="_WorkspaceFileSearchChanged" />
+                    <Grid Grid.Row="1">
+                        <mux:TreeView x:Name="WorkspaceFileTree"
+                                      CanDragItems="False"
+                                      CanReorderItems="False"
+                                      ItemInvoked="_WorkspaceFileInvoked"
+                                      Expanding="_WorkspaceFileExpanding"
+                                      DoubleTapped="_WorkspaceFileDoubleTapped"
+                                      SelectionMode="Single">
+                            <mux:TreeView.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal"
+                                                AutomationProperties.Name="{Binding Content[Name]}">
+                                        <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                  FontSize="14"
+                                                  Glyph="{Binding Content[Glyph]}" />
+                                        <TextBlock Margin="6,0,0,0"
+                                                   Text="{Binding Content[Name]}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </mux:TreeView.ItemTemplate>
+                        </mux:TreeView>
+                        <ListView x:Name="WorkspaceFileSearchResults"
+                                  SelectionChanged="_WorkspaceFileSearchResultSelected"
+                                  DoubleTapped="_WorkspaceFileSearchResultDoubleTapped"
+                                  Visibility="Collapsed" />
+                    </Grid>
+                    <TextBlock x:Name="WorkspaceFilesStatus"
+                               Grid.Row="2"
+                               Margin="12,4,8,8"
+                               Opacity="0.65"
+                               TextTrimming="CharacterEllipsis" />
+                </Grid>
+
                 <Grid x:Name="TabContent"
-                      Grid.Column="0"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
                       GotFocus="_WorkspaceTerminalGotFocus">
@@ -148,7 +143,6 @@
                     </Grid.Background>
                 </Grid>
                 <Grid x:Name="WorkspaceDocumentPanel"
-                      Grid.Column="1"
                       KeyDown="_KeyDownHandler"
                       Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
                       Visibility="Collapsed">
@@ -163,15 +157,12 @@
                                  TabWidthMode="SizeToContent"
                                  SelectionChanged="_WorkspaceDocumentSelectionChanged"
                                  TabCloseRequested="_WorkspaceDocumentTabCloseRequested" />
-                    <RichEditBox x:Name="WorkspaceDocumentEditor"
-                                 Grid.Row="1"
-                                 Margin="8,0,8,4"
-                                 FontFamily="Cascadia Mono"
-                                 IsReadOnly="True"
-                                 ActualThemeChanged="_WorkspaceDocumentThemeChanged"
-                                 GotFocus="_WorkspaceDocumentGotFocus"
-                                 SelectionChanged="_WorkspaceDocumentCaretChanged"
-                                 TextWrapping="NoWrap" />
+                    <Border x:Name="WorkspaceEditorSurface"
+                            Grid.Row="1"
+                            Margin="0"
+                            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                            ActualThemeChanged="_WorkspaceDocumentThemeChanged"
+                            Visibility="Collapsed" />
                     <Grid Grid.Row="2"
                           Margin="12,2,8,8">
                         <Grid.ColumnDefinitions>
@@ -181,19 +172,15 @@
                         <TextBlock x:Name="WorkspaceDocumentStatus"
                                    Opacity="0.65"
                                    TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="WorkspaceDocumentLineStatus"
-                                   Grid.Column="1"
-                                   Margin="8,0,0,0"
-                                   Opacity="0.65" />
                     </Grid>
                 </Grid>
                 <Thumb x:Name="WorkspaceDocumentDivider"
-                       Grid.Column="1"
                        Width="6"
                        HorizontalAlignment="Left"
                        VerticalAlignment="Stretch"
-                       Canvas.ZIndex="1"
+                       Canvas.ZIndex="100"
                        Background="Transparent"
+                       AutomationProperties.AutomationId="WorkspaceDocumentDivider"
                        AutomationProperties.Name="Resize document"
                        DragDelta="_WorkspaceDocumentDividerDragDelta"
                        DragCompleted="_WorkspaceDividerDragCompleted"
@@ -202,39 +189,34 @@
                        Visibility="Collapsed">
                     <Thumb.Template>
                         <ControlTemplate TargetType="Thumb">
-                            <Grid Background="{TemplateBinding Background}">
-                                <Border Width="1"
-                                        HorizontalAlignment="Left"
-                                        Background="{ThemeResource SystemControlForegroundBaseLowBrush}" />
-                            </Grid>
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{ThemeResource SystemControlForegroundBaseLowBrush}"
+                                    BorderThickness="1,0,0,0" />
                         </ControlTemplate>
                     </Thumb.Template>
                 </Thumb>
-            </Grid>
-
-            <Thumb x:Name="WorkspaceFilesDivider"
-                   Grid.Column="2"
-                   Width="6"
-                   HorizontalAlignment="Left"
-                   VerticalAlignment="Stretch"
-                   Canvas.ZIndex="2"
-                   Background="Transparent"
-                   AutomationProperties.Name="Resize files"
-                   DragDelta="_WorkspaceFilesDividerDragDelta"
-                   DragCompleted="_WorkspaceDividerDragCompleted"
-                   PointerEntered="_WorkspaceDividerPointerEntered"
-                   PointerExited="_WorkspaceDividerPointerExited"
-                   Visibility="Collapsed">
-                <Thumb.Template>
-                    <ControlTemplate TargetType="Thumb">
-                        <Grid Background="{TemplateBinding Background}">
-                            <Border Width="1"
-                                    HorizontalAlignment="Left"
-                                    Background="{ThemeResource SystemControlForegroundBaseLowBrush}" />
-                        </Grid>
-                    </ControlTemplate>
-                </Thumb.Template>
-            </Thumb>
+                <Thumb x:Name="WorkspaceFilesDivider"
+                       Width="6"
+                       HorizontalAlignment="Left"
+                       VerticalAlignment="Stretch"
+                       Canvas.ZIndex="101"
+                       Background="Transparent"
+                       AutomationProperties.AutomationId="WorkspaceFilesDivider"
+                       AutomationProperties.Name="Resize files"
+                       DragDelta="_WorkspaceFilesDividerDragDelta"
+                       DragCompleted="_WorkspaceDividerDragCompleted"
+                       PointerEntered="_WorkspaceDividerPointerEntered"
+                       PointerExited="_WorkspaceDividerPointerExited"
+                       Visibility="Collapsed">
+                    <Thumb.Template>
+                        <ControlTemplate TargetType="Thumb">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{ThemeResource SystemControlForegroundBaseLowBrush}"
+                                    BorderThickness="1,0,0,0" />
+                        </ControlTemplate>
+                    </Thumb.Template>
+                </Thumb>
+            </Canvas>
 
             <!--
                 The sidebar and the adjacent panel meet without a gap. The resize
@@ -244,12 +226,12 @@
             -->
             <Thumb x:Name="SideTabDivider"
                    Grid.Column="1"
-                   Grid.ColumnSpan="2"
                    Width="6"
                    HorizontalAlignment="Left"
                    VerticalAlignment="Stretch"
                    Canvas.ZIndex="1"
                    Background="Transparent"
+                   AutomationProperties.AutomationId="SideTabDivider"
                    AutomationProperties.Name="Resize sidebar"
                    DragStarted="_SideTabDividerDragStarted"
                    DragDelta="_SideTabDividerDragDelta"
@@ -263,20 +245,30 @@
                     </ControlTemplate>
                 </Thumb.Template>
             </Thumb>
+
+
         </Grid>
 
-        <!-- The welcome page leaves the workspace navigation reachable. -->
-        <Grid x:Name="WorkspaceHub"
+        <!-- Home is an independent Page route; the workspace body is collapsed. -->
+        <Page x:Name="WorkspaceHub"
               Grid.Row="2"
+              AutomationProperties.AutomationId="WorkspaceHomePage"
               KeyDown="_KeyDownHandler"
-              Canvas.ZIndex="3"
               Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
               Visibility="Collapsed">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel MaxWidth="760"
-                            Margin="36,48,36,36"
-                            HorizontalAlignment="Center">
-                    <TextBlock x:Uid="WorkspaceHubTitle"
+            <ScrollViewer x:Name="WorkspaceHomeViewport"
+                          AutomationProperties.AutomationId="WorkspaceHomeViewport"
+                          HorizontalContentAlignment="Stretch"
+                          VerticalContentAlignment="Stretch"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <Grid Margin="32">
+                <StackPanel x:Name="WorkspaceHubContent"
+                            MaxWidth="680"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center">
+                    <TextBlock x:Name="WorkspaceHubTitle"
+                               x:Uid="WorkspaceHubTitle"
                                FontSize="30"
                                FontWeight="SemiBold" />
                     <TextBlock x:Uid="WorkspaceHubDescription"
@@ -296,7 +288,7 @@
                                FontSize="18"
                                FontWeight="SemiBold" />
                     <ListView x:Name="WorkspaceHubList"
-                              MinWidth="480"
+                              HorizontalContentAlignment="Stretch"
                               MaxHeight="360"
                               SelectionMode="None" />
                     <TextBlock x:Name="WorkspaceHubEmptyText"
@@ -308,14 +300,15 @@
                             Margin="0,24,0,0"
                             Click="_WorkspaceHubBackClick" />
                 </StackPanel>
+                </Grid>
             </ScrollViewer>
-        </Grid>
+        </Page>
 
         <!-- Global actions remain available when the sidebar is collapsed. -->
         <StackPanel x:Name="WorkspaceHeader"
                     Grid.Row="0"
                     Height="40"
-                    KeyUp="_KeyDownHandler"
+                    KeyDown="_KeyDownHandler"
                     Orientation="Horizontal"
                     Visibility="Collapsed">
             <Grid x:Name="SideTabDock"
@@ -340,28 +333,44 @@
                     <!--  E8A0/E89F are the OpenPane/ClosePane glyphs.  -->
                     <FontIcon x:Name="SideTabDockIcon"
                               FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                              FontSize="18"
+                              FontSize="16"
                               Glyph="&#xE8A0;" />
                 </Button>
             </Grid>
             <Button x:Name="WorkspaceHeaderHome"
                     x:Uid="WorkspaceHomeButton"
                     Width="40"
-                    Height="36"
+                    Height="40"
                     Background="Transparent"
                     BorderThickness="0"
                     Click="_WorkspaceHomeClick">
-                <FontIcon FontSize="14"
+                <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                          FontSize="16"
                           Glyph="&#xE80F;" />
             </Button>
             <Button x:Uid="WorkspaceOpenFolderButton"
                     Width="40"
-                    Height="36"
+                    Height="40"
                     Background="Transparent"
                     BorderThickness="0"
                     Click="_WorkspaceHubFolderClick">
-                <FontIcon FontSize="14"
+                <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                          FontSize="16"
                           Glyph="&#xE8B7;" />
+            </Button>
+            <Button x:Name="WorkspaceLayoutButton"
+                    x:Uid="WorkspaceLayoutButton"
+                    Width="40"
+                    Height="40"
+                    AutomationProperties.AutomationId="WorkspaceLayoutButton"
+                    Click="_WorkspaceLayoutClick"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Visibility="Collapsed">
+                <FontIcon FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                          FontSize="16"
+                          Glyph="&#xE8A9;" />
+
             </Button>
             <ContentPresenter x:Name="WorkspaceNewTabHost"
                               VerticalAlignment="Center" />

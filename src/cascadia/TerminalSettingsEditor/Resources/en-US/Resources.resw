@@ -2915,4 +2915,91 @@ This action is applied immediately and cannot be undone.</value>
     <value>System integration and notifications</value>
     <comment>Title of a section that groups settings related to system integration and notifications.</comment>
   </data>
+  <data name="Nav_WorkspaceLayout.Content" xml:space="preserve">
+    <value>Workspace layout</value>
+  </data>
+  <data name="Actions_SettingsTargetWorkspace.Content" xml:space="preserve">
+    <value>Workspace settings</value>
+  </data>
+  <data name="WorkspaceLayoutDescription.Text" xml:space="preserve">
+    <value>Arrange files, terminal and editor independently. Move a pane beside, above or below another pane, or drag it to an edge in the preview.</value>
+  </data>
+  <data name="WorkspaceLayoutComposeHeading.Text" xml:space="preserve">
+    <value>Arrange panes</value>
+  </data>
+  <data name="WorkspaceLayoutVisibilityHeading.Text" xml:space="preserve">
+    <value>Visible surfaces</value>
+  </data>
+  <data name="WorkspaceLayoutSourceLabel.Header" xml:space="preserve">
+    <value>Move</value>
+  </data>
+  <data name="WorkspaceLayoutTargetLabel.Header" xml:space="preserve">
+    <value>Next to</value>
+  </data>
+  <data name="WorkspaceLayoutSideLabel.Header" xml:space="preserve">
+    <value>Position</value>
+  </data>
+  <data name="WorkspaceLayoutMoveLabel.Content" xml:space="preserve">
+    <value>Move pane</value>
+  </data>
+  <data name="WorkspaceLayoutResetLabel.Content" xml:space="preserve">
+    <value>Restore default layout</value>
+  </data>
+  <data name="WorkspaceLayoutRootRatioLabel.Header" xml:space="preserve">
+    <value>Main divider position (%)</value>
+  </data>
+  <data name="WorkspaceLayoutInnerRatioLabel.Header" xml:space="preserve">
+    <value>Inner divider position (%)</value>
+  </data>
+  <data name="WorkspaceShowFilesLabel.Header" xml:space="preserve">
+    <value>File tree</value>
+  </data>
+  <data name="WorkspaceShowTerminalLabel.Header" xml:space="preserve">
+    <value>Terminal</value>
+  </data>
+  <data name="WorkspaceShowEditorLabel.Header" xml:space="preserve">
+    <value>Editor</value>
+  </data>
+  <data name="WorkspaceShowTabsLabel.Header" xml:space="preserve">
+    <value>Tabs</value>
+  </data>
+  <data name="WorkspaceLayoutShortcutHint.Text" xml:space="preserve">
+    <value>Hiding a surface keeps its terminals and unsaved edits. Assign shortcuts for each surface or for opening this page in Actions. Save applies your changes; Discard changes restores your saved settings.</value>
+  </data>
+  <data name="WorkspacePaneFilesItem.Content" xml:space="preserve">
+    <value>File tree</value>
+  </data>
+  <data name="WorkspacePaneTerminalItem.Content" xml:space="preserve">
+    <value>Terminal</value>
+  </data>
+  <data name="WorkspacePaneEditorItem.Content" xml:space="preserve">
+    <value>Editor</value>
+  </data>
+  <data name="WorkspaceSideLeft.Content" xml:space="preserve">
+    <value>Left</value>
+  </data>
+  <data name="WorkspaceSideRight.Content" xml:space="preserve">
+    <value>Right</value>
+  </data>
+  <data name="WorkspaceSideAbove.Content" xml:space="preserve">
+    <value>Above</value>
+  </data>
+  <data name="WorkspaceSideBelow.Content" xml:space="preserve">
+    <value>Below</value>
+  </data>
+  <data name="WorkspacePaneFiles" xml:space="preserve">
+    <value>File tree</value>
+  </data>
+  <data name="WorkspacePaneTerminal" xml:space="preserve">
+    <value>Terminal</value>
+  </data>
+  <data name="WorkspacePaneEditor" xml:space="preserve">
+    <value>Editor</value>
+  </data>
+  <data name="WorkspacePaneTabs" xml:space="preserve">
+    <value>Tabs</value>
+  </data>
+  <data name="WorkspaceLayoutChooseDifferentPanes" xml:space="preserve">
+    <value>Choose two different panes to move.</value>
+  </data>
 </root>

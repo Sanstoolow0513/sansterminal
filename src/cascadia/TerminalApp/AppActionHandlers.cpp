@@ -31,6 +31,117 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
+    bool TerminalPage::_IsWorkspaceGlobalAction(const ActionAndArgs& action)
+    {
+        if (!action)
+        {
+            return false;
+        }
+        switch (action.Action())
+        {
+        case ShortcutAction::NewTab:
+        case ShortcutAction::NewWindow:
+        case ShortcutAction::DuplicateTab:
+        case ShortcutAction::OpenNewTabDropdown:
+        case ShortcutAction::CloseTab:
+        case ShortcutAction::CloseOtherTabs:
+        case ShortcutAction::CloseTabsAfter:
+        case ShortcutAction::CloseWindow:
+        case ShortcutAction::NextTab:
+        case ShortcutAction::PrevTab:
+        case ShortcutAction::SwitchToTab:
+        case ShortcutAction::MoveTab:
+        case ShortcutAction::TabSearch:
+        case ShortcutAction::RestoreLastClosed:
+        case ShortcutAction::ToggleWorkspaceFiles:
+        case ShortcutAction::ToggleWorkspaceTerminal:
+        case ShortcutAction::ToggleWorkspaceEditor:
+        case ShortcutAction::ToggleWorkspaceTabs:
+        case ShortcutAction::OpenWorkspaceLayout:
+        case ShortcutAction::OpenSettings:
+        case ShortcutAction::OpenAbout:
+        case ShortcutAction::ToggleCommandPalette:
+        case ShortcutAction::ToggleFocusMode:
+        case ShortcutAction::ToggleFullscreen:
+        case ShortcutAction::ToggleAlwaysOnTop:
+        case ShortcutAction::SetFocusMode:
+        case ShortcutAction::SetFullScreen:
+        case ShortcutAction::SetMaximized:
+        case ShortcutAction::IdentifyWindow:
+        case ShortcutAction::IdentifyWindows:
+        case ShortcutAction::RenameWindow:
+        case ShortcutAction::OpenWindowRenamer:
+        case ShortcutAction::OpenSystemMenu:
+        case ShortcutAction::OpenWorkspace:
+        case ShortcutAction::Workspaces:
+        case ShortcutAction::Quit:
+            return true;
+        case ShortcutAction::MultipleActions:
+            if (const auto args = action.Args().try_as<MultipleActionsArgs>())
+            {
+                const auto actions = args.Actions();
+                return actions && std::all_of(actions.begin(), actions.end(), _IsWorkspaceGlobalAction);
+            }
+            return false;
+        default:
+            return false;
+        }
+    }
+
+    bool TerminalPage::HasWorkspaceKeyBinding(const KeyChord& keys)
+    {
+        if (const auto actionMap = _settings.ActionMap())
+        {
+            if (const auto command = actionMap.GetActionByKeyChord(keys))
+            {
+                return _IsWorkspaceGlobalAction(command.ActionAndArgs());
+            }
+        }
+        return false;
+    }
+
+    bool TerminalPage::HandleWorkspaceKeyBinding(const KeyChord& keys)
+    {
+        if (const auto actionMap = _settings.ActionMap())
+        {
+            if (const auto command = actionMap.GetActionByKeyChord(keys); command && _IsWorkspaceGlobalAction(command.ActionAndArgs()))
+            {
+                return _actionDispatch->DoAction(command.ActionAndArgs());
+            }
+        }
+        return false;
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceFiles(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"files");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceTerminal(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"terminal");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceEditor(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"editor");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleWorkspaceTabs(const IInspectable&, const ActionEventArgs& args)
+    {
+        _ToggleWorkspacePane(L"tabs");
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleOpenWorkspaceLayout(const IInspectable&, const ActionEventArgs& args)
+    {
+        OpenSettingsUI(SettingsTarget::Workspace);
+        args.Handled(true);
+    }
+
     TermControl TerminalPage::_senderOrActiveControl(const IInspectable& sender)
     {
         if (sender)

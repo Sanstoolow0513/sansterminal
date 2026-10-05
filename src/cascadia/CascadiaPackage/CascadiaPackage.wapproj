@@ -59,7 +59,7 @@
     <OCResourceDirectory Include="Resources" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(EnableEditorHostProbe)' == 'true'">
+  <ItemGroup>
     <Content Include="..\EditorHostProbe\dist\**\*">
       <Link>EditorHostProbe\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Content>
@@ -180,7 +180,7 @@
   <!-- This is required to get the package dependency in the AppXManifest. -->
   <Import Project="$(OpenConsoleDir)src\common.nugetversions.targets" />
 
-  <ItemGroup Condition="'$(EnableEditorHostProbe)' == 'true'">
+  <ItemGroup>
     <Content Include="$(WebView2PackageRoot)\LICENSE.txt">
       <Link>EditorHostProbe\LICENSE.webview2.txt</Link>
     </Content>

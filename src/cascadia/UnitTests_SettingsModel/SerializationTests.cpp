@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include "pch.h"
+#include "../TerminalSettingsModel/WorkspaceLayout.h"
 
 #include "../TerminalSettingsModel/ColorScheme.h"
 #include "../TerminalSettingsModel/CascadiaSettings.h"
@@ -38,6 +39,7 @@ namespace SettingsModelUnitTests
 
         TEST_METHOD(GlobalSettings);
         TEST_METHOD(RoundtripTabPosition);
+        TEST_METHOD(WorkspaceLayoutSettings);
         TEST_METHOD(Profile);
         TEST_METHOD(ColorScheme);
         TEST_METHOD(Actions);
@@ -128,6 +130,47 @@ namespace SettingsModelUnitTests
 
         const auto invalid = VerifyParseSucceeded(R"({"tabPosition":"right"})");
         VERIFY_THROWS(implementation::GlobalAppSettings::FromJson(invalid), std::exception);
+    }
+
+    void SerializationTests::WorkspaceLayoutSettings()
+    {
+        const auto defaults = winrt::make_self<implementation::GlobalAppSettings>();
+        VERIFY_ARE_EQUAL(winrt::hstring{ Sansterminal::WorkspaceLayout::DefaultJson }, defaults->WorkspaceLayout());
+        VERIFY_IS_TRUE(defaults->WorkspaceShowFiles());
+        VERIFY_IS_TRUE(defaults->WorkspaceShowTerminal());
+        VERIFY_IS_TRUE(defaults->WorkspaceShowEditor());
+        VERIFY_IS_TRUE(defaults->WorkspaceShowTabs());
+        VERIFY_IS_FALSE(defaults->ToJson().isMember("workspaceLayout"));
+        const auto json = VerifyParseSucceeded(R"({
+            "workspaceLayout": {"direction":"row","ratio":0.3,"first":"files","second":{"direction":"column","ratio":0.58,"first":"editor","second":"terminal"}},
+            "workspaceShowFiles":false,"workspaceShowTerminal":false,"workspaceShowEditor":false,"workspaceShowTabs":false,
+            "actions":[],"keybindings":[]
+        })");
+        const auto settings = implementation::GlobalAppSettings::FromJson(json);
+        const auto roundtrip = settings->ToJson();
+        VERIFY_IS_TRUE(roundtrip["workspaceLayout"].isObject());
+        VERIFY_ARE_EQUAL(toString(json), toString(roundtrip));
+        const auto copy = settings->Copy();
+        auto composed = Sansterminal::WorkspaceLayout::Layout::Parse(std::wstring_view{ copy->WorkspaceLayout() });
+        VERIFY_IS_TRUE(composed.Move(Sansterminal::WorkspaceLayout::Pane::Files, Sansterminal::WorkspaceLayout::Pane::Editor, Sansterminal::WorkspaceLayout::Side::Below));
+        copy->WorkspaceLayout(winrt::hstring{ composed.Serialize() });
+        copy->WorkspaceShowFiles(true);
+        VERIFY_ARE_NOT_EQUAL(settings->WorkspaceLayout(), copy->WorkspaceLayout());
+        VERIFY_IS_FALSE(settings->WorkspaceShowFiles());
+        VERIFY_IS_TRUE(copy->WorkspaceShowFiles());
+        VERIFY_ARE_EQUAL(toString(json), toString(settings->ToJson()));
+        for (const std::string_view invalid : {
+                 R"({"workspaceLayout":"escaped JSON is not a tree"})",
+                 R"({"workspaceLayout":{"direction":"row","ratio":0.5,"first":"files","second":"files"}})",
+                 R"({"workspaceLayout":{"direction":"column","ratio":0.5,"first":"files","second":"terminal"}})",
+                 R"({"workspaceLayout":{"direction":"row","ratio":0,"first":"files","second":{"direction":"column","ratio":0.5,"first":"terminal","second":"editor"}}})" })
+        {
+            const auto invalidJson = VerifyParseSucceeded(invalid);
+            VERIFY_THROWS(implementation::GlobalAppSettings::FromJson(invalidJson), std::invalid_argument);
+        }
+        const auto cleared = implementation::GlobalAppSettings::FromJson(VerifyParseSucceeded(R"({"workspaceLayout":null})"));
+        VERIFY_IS_FALSE(cleared->HasWorkspaceLayout());
+        VERIFY_IS_FALSE(cleared->ToJson().isMember("workspaceLayout"));
     }
 
     void SerializationTests::GlobalSettings()

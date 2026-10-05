@@ -1,20 +1,27 @@
-![Windows Terminal project logos and branding image](https://github.com/microsoft/terminal/assets/91625426/333ddc76-8ab2-4eb4-a8c0-4d7b953b1179)
+# Sansterminal
 
-[![Terminal Build Status](https://dev.azure.com/shine-oss/terminal/_apis/build/status%2FTerminal%20CI?branchName=main)](https://dev.azure.com/shine-oss/terminal/_build/latest?definitionId=1&branchName=main)
+Sansterminal is a workspace built around the terminal, based on
+[Windows Terminal](https://github.com/microsoft/terminal). It brings multiple
+workspaces, terminal sessions, and project files into one window while retaining
+Windows Terminal's terminal, pane, rendering, and connection infrastructure.
 
-# Welcome to the Windows Terminal, Console and Command-Line repo
+This is an independently maintained fork, not affiliated with Microsoft.
+It is developed under the [MIT license](./LICENSE); upstream attribution and
+third-party notices are retained in [LICENSE](./LICENSE) and [NOTICE.md](./NOTICE.md).
 
 <details>
   <summary><strong>Table of Contents</strong></summary>
 
-- [Installing and running Windows Terminal](#installing-and-running-windows-terminal)
+- [Sansterminal Features](#sansterminal-features)
+- [Trying Sansterminal](#trying-sansterminal)
+- [Installing and running Windows Terminal (upstream)](#installing-and-running-windows-terminal)
   - [Microsoft Store \[Recommended\]](#microsoft-store-recommended)
   - [Other install methods](#other-install-methods)
     - [Via GitHub](#via-github)
     - [Via Windows Package Manager CLI (aka winget)](#via-windows-package-manager-cli-aka-winget)
     - [Via Chocolatey (unofficial)](#via-chocolatey-unofficial)
     - [Via Scoop (unofficial)](#via-scoop-unofficial)
-- [Installing Windows Terminal Canary](#installing-windows-terminal-canary)
+- [Installing Windows Terminal Canary (upstream)](#installing-windows-terminal-canary)
 - [Terminal \& Console Overview](#terminal--console-overview)
   - [Windows Terminal](#windows-terminal)
   - [The Windows Console Host](#the-windows-console-host)
@@ -39,7 +46,8 @@
 
 <br />
 
-This repository contains the source code for:
+This repository contains source code derived from the following upstream
+projects and components:
 
 * [Windows Terminal](https://aka.ms/terminal)
 * [Windows Terminal Preview](https://aka.ms/terminal-preview)
@@ -56,7 +64,51 @@ Related repositories include:
 * [Console API Documentation](https://github.com/MicrosoftDocs/Console-Docs)
 * [Cascadia Code Font](https://github.com/Microsoft/Cascadia-Code)
 
+## Sansterminal Features
+
+* **Multiple workspaces in one window**: Create named workspaces or open project
+  folders, each with its own terminal group. Switching workspaces keeps existing
+  terminal sessions running; closing the last terminal leaves the workspace open.
+* **Grouped navigation on the left**: See all open workspaces and their terminals
+  in a resizable, collapsible sidebar. Select any terminal to activate its
+  workspace and focus the existing session. The original top tab layout remains
+  available.
+* **Project files beside the terminal**: Browse a folder tree, search by filename
+  or relative path, and open text files in a read-only preview with basic syntax
+  highlighting. Single-click to preview; double-click to pin a document tab.
+* **Context across workspace switches**: Keep file tree state, search text,
+  preview selection, and panel widths while moving between workspaces. Recent
+  workspaces are saved separately for reopening later.
+
+File previews currently show at most the first 512 KiB. Editing, saving, and file
+watching are not yet implemented, and file tree and document context are retained
+only within the current app session. The optional [Monaco editor host
+probe](./doc/editor-host-probe.md) is a developer experiment, disabled by default.
+This verification branch also provides an opt-in [WebView workspace editor
+integration](./doc/webview-editor-integration.md) with native document buffers
+and file saving.
+See [Workspace implementation and plans](./doc/workspace-mvp.md) for details.
+
+## Trying Sansterminal
+
+To run this fork, follow [Building the Code](#building-the-code) and
+[Running & Debugging](#running--debugging) below to build and deploy
+`CascadiaPackage`. The development app is `WindowsTerminalDev`, separate from
+the Microsoft Store version of Windows Terminal. Command-line deployment is
+also documented in [Workspace build and deployment](./doc/workspace-mvp.md#构建测试与部署).
+
+1. For grouped navigation, select **Left** under **Settings → Appearance → Tab
+   position**, save, and restart the app. The equivalent global JSON setting is
+   `"tabPosition": "left"`; the default is `"top"`.
+2. On the welcome page, create a named workspace or open a project folder.
+   The first terminal in a folder workspace starts in that folder.
+3. Use **+** to add terminals to the current workspace, select terminals in the
+   sidebar to switch workspaces, and open files to preview them alongside a terminal.
+
 ## Installing and running Windows Terminal
+
+The installation methods in this section install **upstream Windows Terminal**.
+For this fork's workspace features, follow [Trying Sansterminal](#trying-sansterminal).
 
 > [!NOTE]
 > Windows Terminal requires Windows 10 2004 (build 19041) or later
@@ -64,17 +116,17 @@ Related repositories include:
 ### Microsoft Store [Recommended]
 
 Install the [Windows Terminal from the Microsoft Store][store-install-link].
-This allows you to always be on the latest version when we release new builds
+This allows you to always be on the latest version when the upstream team releases new builds
 with automatic upgrades.
 
-This is our preferred method.
+This is the upstream project's preferred method.
 
 ### Other install methods
 
 #### Via GitHub
 
 For users who are unable to install Windows Terminal from the Microsoft Store,
-released builds can be manually downloaded from this repository's [Releases
+released builds can be manually downloaded from the upstream [Releases
 page](https://github.com/microsoft/terminal/releases).
 
 Download the `Microsoft.WindowsTerminal_<versionNumber>.msixbundle` file from
@@ -156,9 +208,9 @@ repository.
 ---
 
 ## Installing Windows Terminal Canary
-Windows Terminal Canary is a nightly build of Windows Terminal. This build has the latest code from our `main` branch, giving you an opportunity to try features before they make it to Windows Terminal Preview.
+Windows Terminal Canary is a nightly build of upstream Windows Terminal. This build has the latest code from the upstream `main` branch, giving you an opportunity to try features before they make it to Windows Terminal Preview.
 
-Windows Terminal Canary is our least stable offering, so you may discover bugs before we have had a chance to find them.
+Windows Terminal Canary is the upstream project's least stable offering, so you may discover bugs before the upstream team has had a chance to find them.
 
 Windows Terminal Canary is available as an App Installer distribution and a Portable ZIP distribution.
 
@@ -180,7 +232,8 @@ _Learn more about the [types of Windows Terminal distributions](https://learn.mi
 ## Terminal & Console Overview
 
 Please take a few minutes to review the overview below before diving into the
-code:
+code. This overview describes the upstream architecture and its development
+history, which form the foundation of Sansterminal:
 
 ### Windows Terminal
 
@@ -189,18 +242,18 @@ for command-line users. It includes many of the features most frequently
 requested by the Windows command-line community including support for tabs, rich
 text, globalization, configurability, theming & styling, and more.
 
-The Terminal will also need to meet our goals and measures to ensure it remains
-fast and efficient, and doesn't consume vast amounts of memory or power.
+The Terminal is designed to remain fast and efficient without consuming vast
+amounts of memory or power.
 
 ### The Windows Console Host
 
 The Windows Console host, `conhost.exe`, is Windows' original command-line user
 experience. It also hosts Windows' command-line infrastructure and the Windows
 Console API server, input engine, rendering engine, user preferences, etc. The
-console host code in this repository is the actual source from which the
-`conhost.exe` in Windows itself is built.
+console host code in this repository is derived from the upstream source for
+the `conhost.exe` built into Windows.
 
-Since taking ownership of the Windows command-line in 2014, the team added
+Since taking ownership of the Windows command-line in 2014, the upstream team added
 several new features to the Console, including background transparency,
 line-based selection, support for [ANSI / Virtual Terminal
 sequences](https://en.wikipedia.org/wiki/ANSI_escape_code), [24-bit
@@ -210,11 +263,11 @@ a [Pseudoconsole
 and more.
 
 However, because Windows Console's primary goal is to maintain backward
-compatibility, we have been unable to add many of the features the community
+compatibility, the upstream team was unable to add many of the features the community
 (and the team) have been wanting for the last several years including tabs,
 unicode text, and emoji.
 
-These limitations led us to create the new Windows Terminal.
+These limitations led the upstream team to create the new Windows Terminal.
 
 > You can read more about the evolution of the command-line in general, and the
 > Windows command-line specifically in [this accompanying series of blog
@@ -223,7 +276,7 @@ These limitations led us to create the new Windows Terminal.
 
 ### Shared Components
 
-While overhauling Windows Console, we modernized its codebase considerably,
+While overhauling Windows Console, the upstream team modernized its codebase considerably,
 cleanly separating logical entities into modules and classes, introduced some
 key extensibility points, replaced several old, home-grown collections and
 containers with safer, more efficient [STL
@@ -238,17 +291,17 @@ storing both UTF-16 and UTF-8, a VT parser/emitter, and more.
 
 ### Creating the new Windows Terminal
 
-When we started planning the new Windows Terminal application, we explored and
-evaluated several approaches and technology stacks. We ultimately decided that
-our goals would be best met by continuing our investment in our C++ codebase,
-which would allow us to reuse several of the aforementioned modernized
-components in both the existing Console and the new Terminal. Further, we
-realized that this would allow us to build much of the Terminal's core itself as
+When the upstream team started planning the new Windows Terminal application, they explored and
+evaluated several approaches and technology stacks. They ultimately decided that
+their goals would be best met by continuing their investment in the C++ codebase,
+which would allow them to reuse several of the aforementioned modernized
+components in both the existing Console and the new Terminal. Further, they
+realized that this would allow them to build much of the Terminal's core itself as
 a reusable UI control that others can incorporate into their own applications.
 
-The result of this work is contained within this repo and delivered as the
+The result of this upstream work is included in this repo and delivered as the
 Windows Terminal application you can download from the Microsoft Store, or
-[directly from this repo's
+[directly from upstream
 releases](https://github.com/microsoft/terminal/releases).
 
 ---
@@ -296,39 +349,34 @@ Visual Studio.
 
 ## Documentation
 
-All project documentation is located at [aka.ms/terminal-docs](https://aka.ms/terminal-docs). If you would like
-to contribute to the documentation, please submit a pull request on the [Windows
-Terminal Documentation repo](https://github.com/MicrosoftDocs/terminal).
+Sansterminal's development documentation is in [doc/](./doc), including
+[building](./doc/building.md), [debugging](./doc/Debugging.md), and the
+[workspace implementation](./doc/workspace-mvp.md). Project conventions are
+documented in [AGENTS.md](./AGENTS.md).
+
+Upstream user documentation is available at [aka.ms/terminal-docs](https://aka.ms/terminal-docs).
+Contributions to those upstream docs belong in the [Windows Terminal
+Documentation repo](https://github.com/MicrosoftDocs/terminal).
 
 ---
 
 ## Contributing
 
-We are excited to work alongside you, our amazing community, to build and
-enhance Windows Terminal\!
+Contributions to Sansterminal are welcome. Please submit issues and pull requests
+to [Sanstoolow0513/sansterminal](https://github.com/Sanstoolow0513/sansterminal).
 
-***BEFORE you start work on a feature/fix***, please read & follow our
-[Contributor's
-Guide](./CONTRIBUTING.md) to
-help avoid any wasted or duplicate effort.
+***BEFORE you start work on a feature/fix***, please read the project conventions
+in [AGENTS.md](./AGENTS.md). The inherited [Contributor's Guide](./CONTRIBUTING.md)
+provides upstream workflow background; its Microsoft-specific contacts and
+repository links refer to the upstream project.
 
 ## Communicating with the Team
 
-The easiest way to communicate with the team is via GitHub issues.
+The easiest way to discuss Sansterminal is via [this repository's GitHub
+issues](https://github.com/Sanstoolow0513/sansterminal/issues).
 
 Please file new issues, feature requests and suggestions, but **DO search for
 similar open/closed preexisting issues before creating a new issue.**
-
-If you would like to ask a question that you feel doesn't warrant an issue
-(yet), please reach out to us via Twitter:
-
-* Christopher Nguyen, Product Manager:
-  [@nguyen_dows](https://twitter.com/nguyen_dows)
-* Dustin Howett, Engineering Lead: [@dhowett](https://twitter.com/DHowett)
-* Mike Griese, Senior Developer: [@zadjii@mastodon.social](https://mastodon.social/@zadjii)
-* Carlos Zamora, Developer: [@cazamor_msft](https://twitter.com/cazamor_msft)
-* Pankaj Bhojwani, Developer
-* Leonard Hecker, Developer: [@LeonardHecker](https://twitter.com/LeonardHecker)
 
 ## Developer Guidance
 
@@ -417,12 +465,9 @@ order to be effective contributors to our project.
 
 ## Code of Conduct
 
-This project has adopted the [Microsoft Open Source Code of
-Conduct][conduct-code]. For more information see the [Code of Conduct
-FAQ][conduct-FAQ] or contact [opencode@microsoft.com][conduct-email] with any
-additional questions or comments.
+This repository retains the [Microsoft Open Source Code of
+Conduct][conduct-code] from the upstream project. For questions about
+Sansterminal, use [this repository's issues](https://github.com/Sanstoolow0513/sansterminal/issues).
 
 [conduct-code]: https://opensource.microsoft.com/codeofconduct/
-[conduct-FAQ]: https://opensource.microsoft.com/codeofconduct/faq/
-[conduct-email]: mailto:opencode@microsoft.com
 [store-install-link]: https://aka.ms/terminal

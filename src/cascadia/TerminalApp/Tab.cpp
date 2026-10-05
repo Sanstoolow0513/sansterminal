@@ -860,6 +860,12 @@ namespace winrt::TerminalApp::implementation
         _navigationCloseButton = winrt::make_weak(closeButton);
         row.PointerEntered({ get_weak(), &Tab::_NavigationRowPointerEntered });
         row.PointerExited({ get_weak(), &Tab::_NavigationRowPointerExited });
+        row.ActualThemeChanged([weakThis = get_weak()](auto&&, auto&&) {
+            if (const auto tab = weakThis.get())
+            {
+                tab->_UpdateNavigationRowColor();
+            }
+        });
         _UpdateNavigationCloseButton();
         _UpdateNavigationRowColor();
     }
@@ -922,13 +928,18 @@ namespace winrt::TerminalApp::implementation
                 }
             };
             const auto themes = TabViewItem().Resources().ThemeDictionaries();
-            const auto lightKey = box_value(L"Light");
+            const auto themeKey = box_value(winrt::Windows::UI::ViewManagement::AccessibilitySettings{}.HighContrast() ? L"HighContrast" :
+                                            row.ActualTheme() == ElementTheme::Light                                   ? L"Light" :
+                                                                                                                         L"Dark");
             const auto backgroundKey = box_value(L"TabViewItemHeaderBackgroundSelected");
             const auto foregroundKey = box_value(_navigationRowSelected ? L"TabViewItemHeaderForegroundSelected" : L"TabViewItemHeaderForeground");
             row.Resources().ThemeDictionaries().Clear();
-            if (themes.HasKey(lightKey))
+            // A terminal's theme normally uses its black console background.
+            // Sidebar rows use the page selection fill unless the user assigned
+            // an explicit tab color. Always resolve that color in the row's theme.
+            if (GetTabColor().has_value() && themes.HasKey(themeKey))
             {
-                const auto colors = themes.Lookup(lightKey).as<ResourceDictionary>();
+                const auto colors = themes.Lookup(themeKey).as<ResourceDictionary>();
                 if (colors.HasKey(backgroundKey) && colors.HasKey(foregroundKey))
                 {
                     for (const auto& [key, value] : themes)

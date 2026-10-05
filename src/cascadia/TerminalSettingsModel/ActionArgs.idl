@@ -89,7 +89,8 @@ namespace Microsoft.Terminal.Settings.Model
         DefaultsFile,
         AllFiles,
         SettingsUI,
-        Directory
+        Directory,
+        Workspace
     };
 
     enum MoveTabDirection
